@@ -56,6 +56,31 @@ Returned under `stack` (cost order), each tier `ran` / `skipped` / `needs_input`
 
 The four CPU tiers cover the static metal site to [CheckMyMetal](https://journals.iucr.org/m/issues/2024/05/00/be5298/) parity (lengths · valence · nVECSUM · geometry); the rest add physics, precedent, and protein-level checks when their inputs are available.
 
+## Sample output
+Real run on a CN5 design. **Default (CPU, runs anywhere):**
+```jsonc
+{ "consensus": "defer",
+  "verifiers": {
+    "geometry":       { "label": "weak",  "reason": "strained geometry (2.3σ)",      "metrics": { "strain_sigma": 2.32, "cn": 5, "cn_modal": 4 } },
+    "bond_valence":   { "label": "defer", "reason": "BVS 0.90 vs formal 2 (Δ1.10)",  "metrics": { "bvs": 0.9, "delta": 1.1 } },
+    "coord_symmetry": { "label": "trust", "reason": "vector-sum 0.25 (enclosed)",    "metrics": { "nvecsum": 0.253 } },
+    "coord_geometry": { "label": "weak",  "reason": "23.6° RMS vs ideal CN5",        "metrics": { "angle_rmsd_deg": 23.6 } } },
+  "stack": [ /* the four above = "ran"; mlip/mlip_md = "needs_input: pass deep=True";
+               mogul/trs/cofold/expression/thermostability = "needs_input" */ ] }
+```
+
+**`deep=True`** (GPU) — `mlip` / `mlip_md` flip from `needs_input` to `ran`:
+```jsonc
+"mlip":    { "label": "defer", "reason": "site lost 2 donor(s), drift 1.92 Å, ΔE_bind -3.33 eV",
+             "metrics": { "drift_angstrom": 1.92, "cn_before": 5, "cn_after": 3, "interaction_energy_ev": -3.327 } },
+"mlip_md": { "label": "defer", "reason": "shell survived 6% of 300 K MD", "metrics": { "retention": 0.06 } }
+```
+
+**`stress=True`** — adds a `stress` robustness map:
+```jsonc
+"stress": { "neutral": "weak", "leachate": "defer", "low_pH": "trust" }
+```
+
 ## Scope
 The trust threshold is grounded in CSD geometry + physics, **not yet calibrated to wet-lab
 outcomes** — read `trust` as "physically / precedent-plausible," not a calibrated binding
