@@ -1,236 +1,248 @@
-# Boltz Model Usage Contract
+# Boltz Model Usage Skill
 
-This document defines how the agentic protein-design system should use Boltz
-models and Boltz-style artifacts across the existing branches.
+This file defines how an agentic science system should use Boltz models and
+Boltz-style outputs.
 
-It is intentionally additive. It does not replace the `WF` pipeline, the memory
-repository, the `TRS` scorer, or the local loop-runner contracts. It defines the
-interfaces those pieces should share when real Boltz implementations replace the
-current stubs.
+The agent should treat Boltz as an external scientific model system. The agent
+may prepare inputs, submit jobs, monitor execution, parse outputs, compare
+metrics, and decide the next experiment. The agent must not invent Boltz
+outputs, rewrite model metrics, or mark a scientific step complete without
+model artifacts or a recorded model failure.
 
-## Branch Review Basis
+## Interface Preference
 
-This contract is based on the current local and remote branch definitions:
+Use the official Boltz API for agentic workflows when credentials and network
+access are available.
 
-- `origin/WF` defines the LangGraph prototype and the node API reference. Its
-  `boltzgen_generate` node already uses a CIF-first candidate bundle with
-  sequence, structure path, metrics, and design metadata.
-- `origin/main` includes the memory package. Memory stores Boltz references in
-  `ProteinCandidate.boltz_artifacts` and accepts Boltz evaluations through
-  `EvaluationResult(kind=EvaluationKind.BOLTZ)`.
-- `origin/TRS` defines a structure scoring tool for protein-metal binding. TRS
-  should run after Boltz writes structures and should be recorded as screening
-  or verifier evidence, not as a Boltz model output.
-- The local `loop-runner` worktree defines post-`loop_0` adapter boundaries:
-  `CandidateGenerator`, `BoltzEvaluator`, `ScreeningPipeline`, `Verifier`, and
-  `ReflectionWriter`.
-- `origin/codex/add-agents-coordination` and `AGENTS.md` define the branch
-  ownership boundary between WF's temporary pre-loop ranking and memory's
-  durable loop ledger.
+Prefer interfaces in this order:
 
-## Model Roles
+1. Python SDK for Python agents, backend services, notebooks, and workflow
+   runners.
+2. TypeScript SDK for web products, Node services, and TypeScript agents.
+3. Boltz CLI for shell-based agents such as Codex-style environments.
+4. Local open-source CLI execution only when the runtime has the required model
+   files, dependencies, hardware, and disk budget.
 
-Use Boltz models in three separate roles. Do not collapse these into one opaque
-"model score" because each role has different storage and decision semantics.
+When the agent is running inside a shell environment, it may use the CLI because
+the CLI is inspectable, scriptable, and easy to log. When the agent is running
+inside an application or long-lived service, prefer an SDK so job submission,
+polling, retries, and artifact download are explicit in code.
 
-| Role | Agent step | Output owner | Memory representation |
-| --- | --- | --- | --- |
-| Candidate generation | Generate or refine candidate structures from a compiled design spec, template, constraints, or sequence. | `WF` before `loop_0`; runner after `loop_0`. | Selected candidate sequence plus `ArtifactRef` entries for generated structures and input specs. |
-| Structure/confidence evaluation | Predict structure quality and confidence for one selected candidate. | Boltz adapter. | `EvaluationResult(kind=BOLTZ)` and/or `ProteinCandidate.boltz_artifacts`. |
-| Downstream screening feature source | Provide structures and confidence fields for screeners such as TRS, binding-site checks, or verifier tools. | Screening/verifier adapters. | `EvaluationResult(kind=SCREENING)` or `EvaluationResult(kind=VERIFIER)`, with artifacts pointing back to the Boltz structures they consumed. |
+Do not assume local Boltz execution is available. Before using a local CLI,
+verify the executable, model assets, runtime dependencies, GPU or CPU
+requirements, writable output directory, and expected runtime.
 
-The LLM can interpret Boltz outputs, choose the next experiment, and write
-reflections. It must not fabricate Boltz metrics, overwrite model outputs, or
-mark a loop complete without persisted Boltz evidence.
+## Agent Responsibilities
 
-## Canonical Artifact Contract
+The agent owns orchestration and interpretation, not the scientific model
+output.
 
-The canonical structure artifact is mmCIF.
+The agent may:
 
-Boltz adapters must write or reference mmCIF files as the durable structure
-source of truth. PDB may be exported for human convenience, but downstream
-agents should not depend on PDB as the canonical format.
+- translate a natural-language objective into a structured Boltz input,
+- choose whether to use the API, SDK, or CLI based on the runtime,
+- submit Boltz jobs,
+- poll or wait for completion,
+- download and catalog artifacts,
+- parse structures, confidence metrics, affinity metrics, and error reports,
+- compare outputs against the design objective,
+- choose the next candidate, edit, or experiment,
+- write a reflection grounded in the returned artifacts and metrics.
 
-Each candidate bundle should preserve the `WF` branch shape:
+The agent must not:
 
-```python
+- fabricate pLDDT, pTM, ipTM, PAE, affinity, or confidence values,
+- treat an LLM estimate as a Boltz result,
+- silently continue after a failed Boltz job,
+- discard failed job logs that explain why a model call failed,
+- replace a model output artifact with a manually edited structure,
+- use stale artifacts from a previous candidate as if they belonged to the
+  current candidate.
+
+## Standard Job Flow
+
+Use this flow for each Boltz-backed scientific step:
+
+1. Build a structured input from the objective, sequence, chains, ligands,
+   constraints, templates, and any experimental conditions.
+2. Record the input payload or write it to an input file.
+3. Submit the job through the preferred interface.
+4. Record the job id, command, model name, model version when available, and
+   timestamp.
+5. Poll or wait until the job reaches a terminal state.
+6. If the job succeeds, download or locate all result artifacts.
+7. If the job fails, preserve the error payload, logs, and input that produced
+   the failure.
+8. Parse metrics and artifact paths into a machine-readable result.
+9. Validate that the returned artifacts belong to the candidate being evaluated.
+10. Use the result to decide whether to stop, screen, verify, or plan the next
+    candidate.
+
+Every successful result should have both human-readable and machine-readable
+evidence. A sentence saying "Boltz looked good" is not enough.
+
+## Canonical Artifacts
+
+Use mmCIF as the canonical structure artifact when Boltz returns structures.
+
+PDB exports may be useful for visualization or compatibility, but the agent
+should prefer mmCIF for downstream analysis because it preserves richer
+structure metadata and avoids fixed-width PDB limitations.
+
+For each candidate, preserve:
+
+- candidate id,
+- input payload or input file path,
+- sequence and chain definitions,
+- ligand, cofactor, or complex definitions when present,
+- output structure path,
+- confidence and affinity metric files,
+- model logs or job metadata,
+- sampling seed or stochastic configuration when available.
+
+For structure confidence, prefer values read from model outputs or structure
+annotations. Do not recompute confidence with an LLM.
+
+## Expected Result Shape
+
+Represent a Boltz result as a structured record similar to:
+
+```json
 {
-    "id": "cand-78055",
-    "structure_path": "workbench/candidates/iter2/cand-78055.cif",
-    "sequence": "ACDE...",
-    "metrics": {
-        "plddt": 0.82,
-        "ptm": 0.71,
-        "iptm": 0.64,
-        "pae_mean": 5.9
+  "candidate_id": "cand_001",
+  "interface": "api",
+  "job_id": "job_123",
+  "status": "succeeded",
+  "model_name": "boltz",
+  "model_version": "unknown",
+  "input_uri": "runs/run_001/cand_001/input.yaml",
+  "artifacts": [
+    {
+      "uri": "runs/run_001/cand_001/structure.cif",
+      "kind": "structure",
+      "format": "mmcif"
     },
-    "design_metadata": {
-        "target": "ZN2+",
-        "binding_site_residues": [11, 35, 39],
-        "sampling_seed": 1843221090
+    {
+      "uri": "runs/run_001/cand_001/confidence.json",
+      "kind": "confidence_metrics",
+      "format": "json"
     }
+  ],
+  "metrics": {
+    "plddt": 0.82,
+    "ptm": 0.71,
+    "iptm": 0.64,
+    "pae_mean": 5.9
+  },
+  "metadata": {
+    "sampling_seed": 1843221090
+  }
 }
 ```
 
-The mmCIF should include an `_atom_site` loop. Per-residue confidence should be
-recoverable from `B_iso_or_equiv` as `pLDDT * 100` when the model provides that
-signal. Downstream screening tools should read confidence and coordinates from
-the structure artifact instead of trusting only in-memory Python fields.
+Use `status: "failed"` with an error payload when the model call fails. Failed
+model calls are still useful scientific and operational evidence.
 
-## Memory Mapping
+## API Or SDK Usage
 
-For every selected candidate, store artifacts and metrics through memory's
-existing types.
+When using the Boltz API through an SDK:
 
-Use `ProteinCandidate.structure_artifacts` for generally useful structures:
+- keep the input schema explicit,
+- submit one job per candidate or per documented batch unit,
+- poll with bounded retries and clear timeout handling,
+- download artifacts into a durable run directory,
+- store the job id and artifact URIs,
+- distinguish model failure from transport failure,
+- avoid retrying indefinitely if the input itself is invalid.
 
-```python
-ArtifactRef(
-    uri="workbench/candidates/iter2/cand-78055.cif",
-    kind="structure",
-    format="mmcif",
-    sha256="<optional artifact hash>",
-    metadata={"source": "boltz", "candidate_id": "cand-78055"},
-)
+SDK usage is preferred when the agent is part of an application because it makes
+job state and artifact handling explicit.
+
+## CLI Usage
+
+When using a CLI:
+
+- check that the executable is available before planning the run,
+- write the model input to a stable file path,
+- run the command with a stable output directory,
+- capture stdout, stderr, exit code, and runtime,
+- parse files from the output directory instead of scraping terminal text,
+- treat nonzero exit codes as failed model calls,
+- preserve the exact command for reproducibility.
+
+For local open-source Boltz prediction workflows, the agent should expect a
+command shape like:
+
+```bash
+boltz predict input.yaml --out_dir runs/run_001/cand_001
 ```
 
-Use `ProteinCandidate.boltz_artifacts` for Boltz-specific files:
+For local BoltzGen workflows, the agent should expect a command family like:
 
-```python
-ArtifactRef(
-    uri="workbench/candidates/iter2/cand-78055.metrics.json",
-    kind="boltz_metrics",
-    format="json",
-    metadata={
-        "model_name": "boltz",
-        "model_version": "<runtime version>",
-        "sampling_seed": 1843221090,
-        "input_spec_hash": "<optional hash>",
-    },
-)
+```bash
+boltzgen configure ...
+boltzgen run ...
+boltzgen execute ...
 ```
 
-Use `EvaluationResult(kind=EvaluationKind.BOLTZ)` for loop metrics:
+The exact flags can change between releases. The agent should inspect installed
+help output or pinned project documentation before executing a new command.
 
-```python
-EvaluationResult(
-    kind=EvaluationKind.BOLTZ,
-    evaluator_name="boltz",
-    evaluator_version="<runtime version>",
-    metrics=(
-        MetricValue(name="plddt", value=0.82, higher_is_better=True),
-        MetricValue(name="ptm", value=0.71, higher_is_better=True),
-        MetricValue(name="iptm", value=0.64, higher_is_better=True),
-        MetricValue(name="pae_mean", value=5.9, unit="angstrom", higher_is_better=False),
-    ),
-    artifacts=(...),
-)
-```
+## Batching
 
-`finalize_loop(...)` should continue to require a Boltz evaluation or Boltz
-artifact. A loop with only chat text saying "Boltz passed" is incomplete.
+Batch generation can be useful before selecting a candidate, but the agent must
+keep batch and candidate semantics separate.
 
-## Pre-Loop Seed Selection
+When a batch is used:
 
-Before `loop_0`, WF can generate and rank many temporary candidates. That batch
-is not an optimization loop yet.
+- record the batch input and batch job id,
+- preserve per-candidate artifact paths and metrics,
+- rank candidates with explicit criteria,
+- record which candidate was selected and why,
+- keep enough evidence to revisit non-selected candidates later.
 
-The handoff into durable memory is:
+Do not merge several competing candidates into one candidate record.
 
-1. WF sources or generates candidate seeds.
-2. Boltz generation/evaluation writes CIF and metrics artifacts for each seed
-   when available.
-3. Screening and verifier adapters rank the seed pool.
-4. Memory records every considered seed in `SeedCandidatePool`.
-5. Memory records the selected seed in `SeedSelectionDecision`.
-6. Memory creates the run with `create_run_from_seed_selection(...)`; the
-   selected seed becomes `loop_0`.
+## Downstream Screening
 
-Non-selected seeds should retain Boltz artifacts and evaluation summaries so the
-agent can restart from them later.
+Boltz outputs can feed downstream screening and verification tools. Those tools
+should consume structure and metric artifacts, not an LLM summary of them.
 
-## Optimization Loop Usage
+Examples of downstream uses:
 
-After `loop_0`, each finalized loop represents exactly one selected candidate.
+- structural confidence filtering,
+- binding-site confidence checks,
+- affinity or interaction ranking,
+- topology or contact-map scoring,
+- human visualization and review.
 
-The runner may ask a Boltz adapter to sample multiple internal candidates for a
-single planned change, but only one candidate becomes the loop record. If a
-batch was sampled, store the selected candidate as the loop candidate and attach
-batch-level artifacts or metadata for audit. Do not create a loop record that
-contains several competing optimization candidates.
+Screening and verification outputs should be stored as their own results while
+linking back to the Boltz artifacts they consumed.
 
-The post-`loop_0` order is:
+## Stop Conditions
 
-1. Read `AgentLoopContext` from memory.
-2. Plan one `ChangeSet`.
-3. Generate or update the candidate sequence/constraints.
-4. Run Boltz generation or structure evaluation.
-5. Append the pending loop with the selected `ProteinCandidate`.
-6. Attach `EvaluationKind.BOLTZ`.
-7. Run screening adapters, including TRS when the target asks about metal-driven
-   structural reorganization.
-8. Attach `EvaluationKind.SCREENING`.
-9. Run the verifier.
-10. Attach `EvaluationKind.VERIFIER`.
-11. Write `LoopReflection`.
-12. Call `finalize_loop(...)`.
+Boltz metrics are evidence for a decision, not an automatic stop condition.
 
-If Boltz fails after the pending loop exists, keep the loop pending, attach
-diagnostic human input or an error evaluation when possible, and stop rather
-than advancing to the next loop.
+The agent should stop only when the configured objective is satisfied, the loop
+budget is exhausted, a human stops the run, or a blocking failure requires human
+input. A high confidence score can support stopping, but the agent should still
+check the task's explicit goals.
 
-## TRS Relationship
+## Reproducibility
 
-TRS is not a Boltz model. It is a screening/explanation tool that consumes
-structure artifacts.
+Every Boltz-backed step should preserve:
 
-Use TRS after Boltz when:
-
-- the target involves protein-metal binding,
-- the objective asks for conformational or topological reorganization,
-- a human asks why a metal-binding structure was ranked highly,
-- the verifier needs an interpretable structure-change feature.
-
-Record TRS output as `EvaluationKind.SCREENING` unless it is explicitly promoted
-to the final verifier. Include component metrics such as coordination number,
-path-length change, Laplacian change, and total TRS score.
-
-## Stop And Decision Semantics
-
-Boltz metrics are evidence, not the final stop condition by themselves.
-
-The runner should stop when memory goals are satisfied or the loop budget is
-exhausted. Goals may include Boltz metrics, screening metrics, verifier metrics,
-or human-approved criteria. The LLM may recommend stopping, but the controller
-must check `DesignObjective.goals_satisfied_by(...)` or the configured loop
-budget before ending a run.
-
-## Reproducibility Requirements
-
-Every Boltz call should record enough metadata to reproduce or audit the output:
-
-- model name and version,
-- command or adapter name,
-- input spec or config artifact,
-- sampling seed,
+- interface used: API, Python SDK, TypeScript SDK, or CLI,
+- model name and version when available,
+- input payload or file,
+- command or SDK method name,
+- job id when available,
 - candidate id,
-- run id and loop id when known,
-- created artifact URIs,
-- artifact hash when practical,
-- runtime failure details when a call fails.
+- output artifact URIs,
+- metric values,
+- sampling seed or stochastic settings,
+- error logs for failed calls,
+- timestamp and runtime.
 
-The same metadata should be available to the frontend through memory
-visualization payloads via loop artifacts, evaluations, and metric maps.
-
-## Open Integration Decisions
-
-These details are intentionally left for the implementation branches:
-
-- exact Boltz package, checkpoint, and runtime command,
-- GPU or service execution environment,
-- ligand, cofactor, and multichain input schema,
-- persistent artifact storage location,
-- whether affinity-like Boltz outputs should be a verifier metric or only a
-  screening metric,
-- how batch-level pre-loop artifacts are pruned or archived after seed
-  selection.
+This metadata lets later agents, scientists, and humans audit what happened and
+rerun the same scientific step when the environment allows it.

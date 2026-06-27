@@ -59,11 +59,6 @@ Accepted boundary:
 
 ## Boltz Model Usage
 
-The current cross-branch Boltz contract is documented in `BOLTZ_MODELS.md`.
-That document is the integration point between:
-
-- `WF`'s LangGraph generation and scoring stubs.
-- `memory`'s `ProteinCandidate.boltz_artifacts` and `EvaluationKind.BOLTZ`
-  records.
-- `TRS` structure scoring as a downstream screening adapter.
-- `loop-runner` adapter protocols for post-`loop_0` optimization.
+The LLM-facing Boltz usage skill is documented in `BOLTZ_MODELS.md`. Use it when
+an agent needs to decide how to call Boltz models, preserve Boltz artifacts, or
+interpret Boltz outputs.
