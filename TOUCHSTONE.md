@@ -10,6 +10,21 @@ It is wired in as an MCP server (`.mcp.json`), so any agent in this repo can cal
 pulls it from the public [`charleneleong-ai/ai4science`](https://github.com/charleneleong-ai/ai4science)
 repo on first use (requires `uv` on PATH). No install or vendoring.
 
+## Verifier stack
+Defense-in-depth — independent methods across complementary axes; each design gets a
+trust/weak/defer per tier, rolled into one `consensus` (a single `defer` collapses it):
+
+- **Geometry — always on, CPU:** bond lengths vs reference (z-score) · bond-valence sum ·
+  nVECSUM symmetry (is the metal enclosed?) · polyhedron shape vs ideal — [CheckMyMetal](https://journals.iucr.org/m/issues/2024/05/00/be5298/)
+  parity on the static site.
+- **Physics — `deep=True`, GPU:** MLIP (MACE) relaxation · 300 K MLIP-MD — does the site
+  hold and survive thermal motion?
+- **Precedent / protein / cross-checks — need an input:** CSD Mogul (licence) · co-fold
+  re-prediction · ESM expression · Tm thermostability · TRS topology-reorganization (apo).
+
+The cheap CPU tiers run anywhere; the rest light up when a GPU / licence / scorer / apo
+structure is present, otherwise they report `needs_input` rather than guessing.
+
 ## When to use it
 - After generating a metal-binder structure (`.pdb` / `.cif`) → verify **before** wet-lab.
 - Choosing which of several candidates to synthesize → keep only the `trust` set.
