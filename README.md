@@ -18,7 +18,7 @@ Run the integration app from the repository root:
 
 ```bash
 PYTHONPATH=memory/src:loop_runner/src:app/src \
-python -m materialhack_agent \
+python3 -m materialhack_agent \
   "design a protein that binds Zn2+ at pH 5 and can polymerize" \
   --seed-count 5 \
   --loops 2
