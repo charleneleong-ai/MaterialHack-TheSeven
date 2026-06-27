@@ -23,3 +23,17 @@ python3 -m materialhack_agent \
   --seed-count 5 \
   --loops 2
 ```
+
+Run the web workbench with two processes:
+
+```bash
+cd app
+PYTHONPATH=../memory/src:../loop_runner/src:src \
+python3 -m uvicorn materialhack_agent.workbench_api:app --port 8000
+```
+
+```bash
+cd app/web
+npm install
+npm run dev
+```

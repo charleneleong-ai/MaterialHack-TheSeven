@@ -39,6 +39,7 @@ class SeedFlowConfig:
     max_loops: int | None = 2
     rng_seed: int = 7
     created_by: str = "WF"
+    seed_sources: tuple[CandidateOrigin, ...] = (CandidateOrigin.CCDC_CSD, CandidateOrigin.DE_NOVO)
 
 
 @dataclass(frozen=True)
@@ -56,14 +57,17 @@ def create_seeded_run(
     objective_text: str,
     *,
     config: SeedFlowConfig | None = None,
+    parsed: ParsedObjective | None = None,
 ) -> SeedFlowResult:
     """Run the WF-owned pre-loop handoff and create durable `loop_0`."""
 
     config = config or SeedFlowConfig()
     if config.seed_count <= 0:
         raise ValueError("seed_count must be greater than zero")
+    if not config.seed_sources:
+        raise ValueError("seed_sources must include at least one source")
 
-    parsed = parse_objective(objective_text)
+    parsed = parsed or parse_objective(objective_text)
     objective = to_design_objective(
         objective_text,
         parsed=parsed,
@@ -178,7 +182,7 @@ def generate_seed_candidates(parsed: ParsedObjective, *, config: SeedFlowConfig)
     candidates: list[SeedCandidate] = []
     for index in range(config.seed_count):
         seed_id = f"seed_{index + 1:03d}"
-        origin = CandidateOrigin.CCDC_CSD if index % 2 == 0 else CandidateOrigin.DE_NOVO
+        origin = config.seed_sources[index % len(config.seed_sources)]
         length = max(20, parsed.length + rng.randint(-5, 5))
         sequence = _generate_sequence(rng, length)
         plddt = round(rng.uniform(0.55, 0.92), 3)
@@ -327,4 +331,3 @@ def _metric(candidate: SeedCandidate, name: str) -> float:
         if name in metric_map:
             return metric_map[name]
     return 0.0
-

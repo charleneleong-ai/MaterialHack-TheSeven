@@ -56,9 +56,31 @@ python3 -m materialhack_agent \
 The command runs without model credentials. Stub outputs are explicitly marked
 as stubs in memory metadata and evaluator names.
 
+## Run The Workbench
+
+Start the API:
+
+```bash
+PYTHONPATH=../memory/src:../loop_runner/src:src \
+python3 -m uvicorn materialhack_agent.workbench_api:app --port 8000
+```
+
+Start the web UI from `app/web`:
+
+```bash
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`. The Vite dev server proxies `/api` to the
+FastAPI process on port `8000`.
+
 ## Package Layout
 
 - `src/materialhack_agent/seed_flow.py` owns the WF-to-memory pre-loop handoff.
 - `src/materialhack_agent/application.py` composes seed flow and loop runner.
+- `src/materialhack_agent/workbench_api.py` exposes the FastAPI workbench API.
+- `src/materialhack_agent/observable_memory.py` emits workbench events from memory writes.
 - `src/materialhack_agent/cli.py` exposes a runnable command.
+- `web/` contains the React workbench.
 - `tests/` validates the end-to-end handoff and loop execution.
