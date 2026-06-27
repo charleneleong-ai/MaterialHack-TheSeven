@@ -10,7 +10,8 @@ without accidentally overwriting another collaborator's direction.
 | --- | --- | --- | --- |
 | `main` | Team | Stable shared base | Keep minimal until branches are reviewed and merged. |
 | `memory` | M-priv (Michael) | Durable memory abstraction for protein-design runs, loop records, rollback, branching, future TuringDB integration, and durable seed-selection evidence. | Active. Issue #1 boundary agreed; implementation pending. |
-| `WF` | WenruiFan | LangGraph agentic protein-design pipeline, temporary pre-loop candidate flow, stubbed generation/screening/verifier nodes. | Owns temporary pre-loop seed sourcing, scoring, and ranking before handoff to memory. |
+| `WF` | WenruiFan | Agentic protein-design pipeline, temporary pre-loop candidate flow, stubbed generation/screening/verifier nodes. | Owns temporary pre-loop seed sourcing, scoring, and ranking before handoff to memory. |
+| `TRS` | TRS tool owner | Standalone Topological Reorganization Score tool for comparing protein structures before and after metal binding. | Active. Provides a Python API that other agent/model branches can call. |
 
 Update this table when a collaborator takes ownership of a new branch or when a
 branch changes scope.
