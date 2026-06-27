@@ -1,4 +1,5 @@
 from materialhack_agent import MaterialHackAgentApp
+from materialhack_memory import CandidateOrigin
 
 
 def test_agent_app_creates_loop_0_and_runs_optimization_loops():
@@ -14,6 +15,10 @@ def test_agent_app_creates_loop_0_and_runs_optimization_loops():
 
     assert result.seed_flow.run.seed_selection_decision == result.seed_flow.decision
     assert result.seed_flow.selected_seed.seed_candidate_id == result.seed_flow.decision.selected_seed_candidate_id
+    assert {candidate.origin for candidate in result.seed_flow.pool.candidates} == {
+        CandidateOrigin.CCDC_CSD,
+        CandidateOrigin.DE_NOVO,
+    }
     assert result.runner_result is not None
     assert result.runner_result.loops_completed == 2
     assert result.snapshot.active_loop_id == result.runner_result.active_loop_id
@@ -35,4 +40,3 @@ def test_agent_app_can_stop_after_seed_handoff():
     assert len(result.snapshot.nodes) == 1
     assert result.snapshot.nodes[0].index == 0
     assert result.snapshot.seed_selection_decision == result.seed_flow.decision
-

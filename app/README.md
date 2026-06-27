@@ -3,7 +3,8 @@
 This folder is the integration package for the runnable agentic protein-design
 system. It composes the current branch work without changing branch ownership:
 
-- WF-style pre-loop seed sourcing, scoring, ranking, and selection.
+- WF-style pre-loop seed sourcing from either de novo generation or CCDC/CSD,
+  followed by scoring, ranking, and selection.
 - `memory/` durable seed-selection and loop memory, including `loop_0`.
 - `loop_runner/` post-`loop_0` optimization orchestration.
 - Future adapter slots for real Boltz, TRS screening, and verifier tools.
@@ -15,7 +16,7 @@ to run a complete stubbed system:
 
 ```text
 objective
-  -> pre-loop seed candidates
+  -> pre-loop seed candidates from de novo or CCDC/CSD
   -> seed ranking and selection
   -> memory SeedCandidatePool + SeedSelectionDecision
   -> durable loop_0
