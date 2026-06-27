@@ -23,7 +23,7 @@ Edge = tuple[NodeId, NodeId]
 Coordinate = tuple[float, float, float]
 
 DEFAULT_CONTACT_CUTOFF = 4.5
-DEFAULT_METAL_CUTOFF = 3.0
+DEFAULT_METAL_CUTOFF = 2.8
 COPPER_METAL_CUTOFF = 2.8
 COPPER_CONTACT_CUTOFF = 4.5
 COPPER_DONOR_ELEMENTS = ("O", "N", "S")
