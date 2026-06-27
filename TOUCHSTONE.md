@@ -56,30 +56,44 @@ Returned under `stack` (cost order), each tier `ran` / `skipped` / `needs_input`
 
 The four CPU tiers cover the static metal site to [CheckMyMetal](https://journals.iucr.org/m/issues/2024/05/00/be5298/) parity (lengths · valence · nVECSUM · geometry); the rest add physics, precedent, and protein-level checks when their inputs are available.
 
-## Sample output
-Real run on a CN5 design. **Default (CPU, runs anywhere):**
-```jsonc
-{ "consensus": "defer",
-  "verifiers": {
-    "geometry":       { "label": "weak",  "reason": "strained geometry (2.3σ)",      "metrics": { "strain_sigma": 2.32, "cn": 5, "cn_modal": 4 } },
-    "bond_valence":   { "label": "defer", "reason": "BVS 0.90 vs formal 2 (Δ1.10)",  "metrics": { "bvs": 0.9, "delta": 1.1 } },
-    "coord_symmetry": { "label": "trust", "reason": "vector-sum 0.25 (enclosed)",    "metrics": { "nvecsum": 0.253 } },
-    "coord_geometry": { "label": "weak",  "reason": "23.6° RMS vs ideal CN5",        "metrics": { "angle_rmsd_deg": 23.6 } } },
-  "stack": [ /* the four above = "ran"; mlip/mlip_md = "needs_input: pass deep=True";
-               mogul/trs/cofold/expression/thermostability = "needs_input" */ ] }
+## Sample output (rendered)
+The MCP tool returns a JSON dict; the CLI / agent renders it like this. Real runs.
+
+**Default — CPU, runs anywhere** (a clean ideal Ni site → every tier passes → `TRUST`):
+```
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ verifier       ┃ verdict ┃ score ┃ reason                                    ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ geometry       │ trust   │ 0.127 │ plausible (0.3σ, coordination in range)   │
+│ bond_valence   │ trust   │ 0.913 │ BVS 1.83 vs formal 2 (Δ0.17)              │
+│ coord_symmetry │ trust   │ 1.000 │ vector-sum 0.00 (metal enclosed)          │
+│ coord_geometry │ trust   │ 1.000 │ polyhedron fit 0.0° RMS vs ideal CN6      │
+└────────────────┴─────────┴───────┴───────────────────────────────────────────┘
+consensus: TRUST  (CN 6, donors ['N','N','O','O','N','O'])
+robustness: neutral trust, leachate weak, low_pH trust          ← stress=True
+not run (needs input): mogul, trs, cofold, expression, thermostability
 ```
 
-**`deep=True`** (GPU) — `mlip` / `mlip_md` flip from `needs_input` to `ran`:
-```jsonc
-"mlip":    { "label": "defer", "reason": "site lost 2 donor(s), drift 1.92 Å, ΔE_bind -3.33 eV",
-             "metrics": { "drift_angstrom": 1.92, "cn_before": 5, "cn_after": 3, "interaction_energy_ev": -3.327 } },
-"mlip_md": { "label": "defer", "reason": "shell survived 6% of 300 K MD", "metrics": { "retention": 0.06 } }
+**`deep=True` (GPU) + `stress=True`** — `mlip` / `mlip_md` now run (MACE relax + 300 K MD on the A100); a real LigandMPNN CN5 pack → `DEFER`:
 ```
-
-**`stress=True`** — adds a `stress` robustness map:
-```jsonc
-"stress": { "neutral": "weak", "leachate": "defer", "low_pH": "trust" }
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ verifier       ┃ verdict ┃ score ┃ reason                                            ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ geometry       │ weak    │ 0.025 │ strained geometry (2.3σ)                          │
+│ bond_valence   │ defer   │ 0.023 │ BVS 0.90 vs formal 2 (Δ1.10) — defer              │
+│ coord_symmetry │ trust   │ 0.700 │ vector-sum 0.25 (enclosed)                        │
+│ coord_geometry │ weak    │ 0.497 │ polyhedron fit 23.6° RMS vs ideal CN5             │
+│ mlip           │ defer   │ 0.088 │ site lost 2 donor(s), drift 1.92 Å, ΔE_bind -3.33 │
+│                │         │       │ eV — defer                                        │
+│ mlip_md        │ defer   │ 0.059 │ shell survived 6% of 300 K MD — defer             │
+└────────────────┴─────────┴───────┴───────────────────────────────────────────────────┘
+consensus: DEFER  (CN 5, donors ['O','O','N','O','N'])
+robustness: neutral weak, leachate defer, low_pH trust          ← stress=True
+not run (needs input): mogul, trs, cofold, expression, thermostability
 ```
+Without a GPU the `mlip` / `mlip_md` rows read `skipped: no MLIP backend` instead — the
+consensus is still decided by whatever ran. `robustness:` is the `stress` map; `not run`
+lists the tiers awaiting a licence (CSD/Mogul), an apo structure (TRS), or a scorer.
 
 ## Scope
 The trust threshold is grounded in CSD geometry + physics, **not yet calibrated to wet-lab
