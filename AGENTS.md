@@ -9,8 +9,8 @@ without accidentally overwriting another collaborator's direction.
 | Branch | Owner | Scope | Status |
 | --- | --- | --- | --- |
 | `main` | Team | Stable shared base | Keep minimal until branches are reviewed and merged. |
-| `memory` | M-priv (Michael) | Durable memory abstraction for protein-design runs, loop records, rollback, branching, and future TuringDB integration. | Active, but pre-loop seed-selection memory is on standby pending Issue #1 discussion. |
-| `WF` | WenruiFan | LangGraph agentic protein-design pipeline, temporary in-state candidate flow, stubbed generation/screening/verifier nodes. | Separate branch to integrate after memory boundaries are agreed. |
+| `memory` | M-priv (Michael) | Durable memory abstraction for protein-design runs, loop records, rollback, branching, future TuringDB integration, and durable seed-selection evidence. | Active. Issue #1 boundary agreed; implementation pending. |
+| `WF` | WenruiFan | LangGraph agentic protein-design pipeline, temporary pre-loop candidate flow, stubbed generation/screening/verifier nodes. | Owns temporary pre-loop seed sourcing, scoring, and ranking before handoff to memory. |
 
 Update this table when a collaborator takes ownership of a new branch or when a
 branch changes scope.
@@ -28,22 +28,22 @@ The `memory` branch owns the durable memory contract:
 - TuringDB should be attached behind the repository interface after the memory
   abstraction is stable.
 
-## Standby Item
+## Agreed Item
 
 Issue #1 tracks pre-loop seed-selection memory:
 
 https://github.com/wenruifan/MaterialHack-TheSeven/issues/1
 
-Keep this on standby until the team decides whether the `WF` branch should own
-the temporary pre-loop candidate pool, whether the memory branch should persist
-that pool directly, or whether the responsibility should be split.
+M-priv (Michael) and WenruiFan agreed to split the responsibility across the
+`WF` and `memory` branches.
 
-Expected boundary if split:
+Accepted boundary:
 
 - `WF` branch can provide temporary working memory for sourcing, screening, and
   ranking candidate seeds.
 - `memory` branch should persist the selected seed decision and enough evidence
   to restart from alternate seeds later.
+- Optimization loops remain one candidate per loop after `loop_0` for now.
 
 ## Coordination Rules
 
