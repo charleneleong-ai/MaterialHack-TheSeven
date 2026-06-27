@@ -61,7 +61,7 @@ swapping in a real implementation is a **one-function change** (look for the
 | Stub | Signature | Replace with |
 |------|-----------|--------------|
 | `memory_retrieve` | `(spec: dict) -> {"template": dict \| None, "match_score": float}` | vector search over a design memory |
-| `boltzgen_generate` | `(spec: dict, n: int = 8) -> list[{"id", "sequence", "metrics"}]` | BoltzGen structure-conditioned generation |
+| `boltzgen_generate` | `(spec: dict, n: int = 8) -> list[{"id", "sequence", "chains", "structure", "confidence", "design_metadata"}]` | BoltzGen structure-conditioned generation |
 | `screen_score` | `(candidates: list[dict]) -> list[dict]` (adds `"score"`, sorted desc) | in-silico screening / scoring model |
 | `pseudo_lab` | `(candidate: dict, iteration: int) -> {"real_score": float}` | wet-lab assay / high-fidelity oracle |
 

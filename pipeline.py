@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import sys
 from typing import Optional
 
@@ -121,21 +122,53 @@ def memory_retrieve(spec: dict) -> dict:
 
 
 def boltzgen_generate(spec: dict, n: int = 8) -> list[dict]:
-    """Return N candidate designs with random sequences + metrics.
+    """Return N candidate design bundles.
+
+    A real BoltzGen call returns far more than a sequence: a structure
+    (atomic coordinates), per-residue and global confidence (pLDDT, pTM,
+    ipTM, PAE), and design metadata (motif/contig, predicted binding-site
+    residues, sampling seed). This stub mirrors that shape with random
+    values so downstream nodes (screening, scoring) can consume the same
+    fields the real model will produce.
 
     # TODO: replace with real skill (BoltzGen structure-conditioned generation).
     """
     candidates = []
     length = int(spec.get("length", 60))
+    target = spec.get("target", "unknown")
+    motif = spec.get(
+        "template_id",
+        RNG.choice(["zinc-finger", "EF-hand", "coiled-coil", "beta-barrel"]),
+    )
     for i in range(n):
         seq = "".join(RNG.choice(AMINO_ACIDS) for _ in range(length))
+        plddt_per_residue = [round(RNG.uniform(0.35, 0.98), 3) for _ in range(length)]
+        mean_plddt = round(sum(plddt_per_residue) / length, 3)
+        n_sites = min(RNG.randint(2, 4), length)
+        binding_site_residues = sorted(RNG.sample(range(1, length + 1), k=n_sites))
         candidates.append(
             {
                 "id": f"cand-{RNG.randint(10000, 99999)}",
                 "sequence": seq,
-                "metrics": {
-                    "plddt": round(RNG.uniform(0.4, 0.95), 3),
+                "chains": [
+                    {"chain_id": "A", "role": "designed", "sequence": seq, "length": length}
+                ],
+                "structure": {
+                    "format": "pdb",
+                    "num_atoms": length * 8,  # rough heavy-atom count, stand-in for real coords
+                },
+                "confidence": {
+                    "plddt_per_residue": plddt_per_residue,
+                    "plddt": mean_plddt,
                     "ptm": round(RNG.uniform(0.3, 0.9), 3),
+                    "iptm": round(RNG.uniform(0.3, 0.9), 3) if target != "unknown" else None,
+                    "pae_mean": round(RNG.uniform(2.0, 12.0), 2),
+                },
+                "design_metadata": {
+                    "motif": motif,
+                    "binding_site_residues": binding_site_residues,
+                    "target": target,
+                    "sampling_seed": RNG.randint(0, 2**31 - 1),
                 },
             }
         )
@@ -143,12 +176,21 @@ def boltzgen_generate(spec: dict, n: int = 8) -> list[dict]:
 
 
 def screen_score(candidates: list[dict]) -> list[dict]:
-    """Assign a random score to each candidate, return sorted desc.
+    """Score candidates from BoltzGen's own confidence metrics, return sorted desc.
+
+    Composite of global plddt/ptm plus a small bonus for confidently-placed
+    binding-site residues (their local pLDDT), so a "good" candidate is one
+    BoltzGen is structurally confident about *at the functional site*, not
+    just on average.
 
     # TODO: replace with real skill (in-silico screening / scoring model).
     """
     for c in candidates:
-        c["score"] = round(RNG.random(), 3)
+        conf = c["confidence"]
+        site_residues = c["design_metadata"]["binding_site_residues"]
+        site_plddt = [conf["plddt_per_residue"][r - 1] for r in site_residues]
+        site_confidence = sum(site_plddt) / len(site_plddt)
+        c["score"] = round(0.4 * conf["plddt"] + 0.3 * conf["ptm"] + 0.3 * site_confidence, 3)
     return sorted(candidates, key=lambda c: c["score"], reverse=True)
 
 
@@ -167,25 +209,74 @@ def pseudo_lab(candidate: dict, iteration: int) -> dict:
 # Graph nodes — alternating (LLM) and (STUB) per the architecture
 # --------------------------------------------------------------------------- #
 def objective_intake(state: DesignState) -> DesignState:
-    """(LLM) Parse the raw objective into a typed DesignSpec."""
-    fallback = {
-        "target": "Zn2+" if "zn" in state.objective.lower() else "unknown",
-        "ph": 5.0 if "ph 5" in state.objective.lower() else 7.0,
-        "functions": ["bind", "polymerize"]
-        if "polymeriz" in state.objective.lower()
-        else ["bind"],
-        "length": 60,
-    }
+    """(LLM) Parse the raw objective into a typed DesignSpec.
+
+    The real work here is meant to happen in the LLM call below — objectives
+    are free-form text and can name any target/condition/function, not just
+    the ones in the demo string. `_heuristic_intake` is only the no-API-key
+    fallback, so it's a general-purpose regex extractor rather than a
+    lookup for one specific objective.
+    """
+    fallback = _heuristic_intake(state.objective)
     spec = reason(
         system="You parse a natural-language protein-design objective into a "
-        "compact JSON DesignSpec. Reply with ONLY a JSON object with keys: "
-        "target, ph, functions (list), length (int).",
+        "compact JSON DesignSpec. The objective may name any target "
+        "(ion, small molecule, protein, surface, ...), any condition "
+        "(pH, temperature, solvent, ...), and any function — do not assume "
+        "it matches a known template. Reply with ONLY a JSON object with "
+        "keys: target (str), ph (float), functions (list[str]), length (int, "
+        "residues; estimate a sensible default if unspecified).\n"
+        'Example: "a protein that binds collagen at pH 6.5 and folds into a '
+        'beta-barrel" -> {"target": "collagen", "ph": 6.5, "functions": '
+        '["bind", "fold"], "length": 80}',
         user=state.objective,
         fallback=fallback,
     )
     state.spec = spec
     print(f"[1] objective_intake (LLM)   -> spec={spec}")
     return state
+
+
+# Vocabulary for the offline heuristic fallback only — kept broad so it isn't
+# tied to any single demo objective. The LLM path above has no such limits.
+_KNOWN_TARGETS = [
+    "zn2+", "ca2+", "mg2+", "fe2+", "fe3+", "cu2+", "ni2+", "mn2+",
+    "atp", "adp", "dna", "rna", "lipid", "collagen", "heparin",
+]
+_FUNCTION_KEYWORDS = {
+    "bind": "bind", "polymeriz": "polymerize", "catalyz": "catalyze",
+    "cleave": "cleave", "fold": "fold", "fluoresc": "fluoresce",
+    "transport": "transport", "inhibit": "inhibit", "stabiliz": "stabilize",
+    "dimeriz": "dimerize", "aggregat": "aggregate", "sens": "sense",
+}
+
+
+def _heuristic_intake(objective: str) -> dict:
+    """Best-effort, regex-based objective parser used only when no LLM is
+    available. Does not assume which target/condition/function the
+    objective names; everything is detected, not hardcoded to one demo.
+    """
+    text = objective.lower()
+
+    ph_match = re.search(r"ph\s*([\d.]+)", text)
+    ph = float(ph_match.group(1)) if ph_match else 7.0
+
+    target = next((t.upper() for t in _KNOWN_TARGETS if t in text), None)
+    if target is None:
+        bind_match = re.search(r"binds?\s+(?:to\s+)?([a-z0-9+\-]+)", text)
+        target = bind_match.group(1).upper() if bind_match else "unknown"
+
+    functions = [v for k, v in _FUNCTION_KEYWORDS.items() if k in text]
+
+    length_match = re.search(r"(\d+)\s*(?:aa|residues?|amino acids?)", text)
+    length = int(length_match.group(1)) if length_match else 60
+
+    return {
+        "target": target,
+        "ph": ph,
+        "functions": functions or ["bind"],
+        "length": length,
+    }
 
 
 def memory_retrieval(state: DesignState) -> DesignState:
@@ -248,9 +339,13 @@ def compile_spec(state: DesignState) -> DesignState:
 
 
 def boltzgen_node(state: DesignState) -> DesignState:
-    """(STUB) Return N candidate designs."""
+    """(STUB) Return N candidate design bundles (structure + confidence + metadata)."""
     state.candidates = boltzgen_generate(state.spec, n=8)
-    print(f"[5] boltzgen_generate (stub) -> {len(state.candidates)} candidates")
+    avg_plddt = sum(c["confidence"]["plddt"] for c in state.candidates) / len(state.candidates)
+    print(
+        f"[5] boltzgen_generate (stub) -> {len(state.candidates)} candidates "
+        f"(avg plddt={avg_plddt:.3f})"
+    )
     return state
 
 
@@ -374,8 +469,13 @@ def main() -> None:
         )
     print("-" * 70)
     print("Final summary")
-    print(f"  best candidate : {state.best['id']}")
-    print(f"  sequence       : {state.best['sequence'][:40]}...")
+    best = state.best
+    conf = best["confidence"]
+    meta = best["design_metadata"]
+    print(f"  best candidate : {best['id']}")
+    print(f"  sequence       : {best['sequence'][:40]}...")
+    print(f"  plddt / ptm    : {conf['plddt']:.3f} / {conf['ptm']:.3f}  (iptm={conf['iptm']})")
+    print(f"  binding site   : residues {meta['binding_site_residues']} (motif={meta['motif']})")
     print(f"  final score    : {state.pseudo_lab_score:.3f}")
     print(f"  iterations     : {state.iteration}")
     print(f"  verdict        : {state.verdict}")
