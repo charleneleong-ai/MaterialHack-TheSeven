@@ -80,6 +80,47 @@ Implemented component terms:
 All component weights default to `1.0`. Pass a `weights` dictionary to tune the
 importance of each term.
 
+## Copper File Workflow
+
+For copper structures saved as TRIPOS/MOL2-style files, place before/after files
+under `data/copper`.
+
+Supported layouts:
+
+```text
+data/copper/P1_before.mol2
+data/copper/P1_after.mol2
+```
+
+or:
+
+```text
+data/copper/before/P1.mol2
+data/copper/after/P1.mol2
+```
+
+Copper defaults:
+
+- copper-donor cutoff: `2.8 A`
+- donor atoms: `O`, `N`, `S`
+- non-metal heavy-atom contact cutoff: `4.5 A`
+
+Run the plotting workflow:
+
+```powershell
+python scripts/plot_copper_trs.py --input-dir data/copper --output-dir outputs/copper_trs --dpi 600
+```
+
+This writes:
+
+- `outputs/copper_trs/copper_trs_scores.csv`
+- `outputs/copper_trs/copper_trs_before_after_lines.png`
+- `outputs/copper_trs/copper_trs_ranked_change.png`
+
+The line plot uses `0` as the before-binding baseline and the after-binding
+point as the computed TRS change. The ranked bar plot is usually the clearest
+view for identifying which protein changed most.
+
 ## How TRS Can Be Used in Chemistry
 
 For the LLM agent, TRS can act as an interpretable ranking and explanation tool

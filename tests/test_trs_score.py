@@ -1,6 +1,15 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from trs import AtomStructure, ProteinStructure, calculate_3d_trs, calculate_trs, structure_from_3d_coordinates
+from trs import (
+    AtomStructure,
+    ProteinStructure,
+    calculate_3d_trs,
+    calculate_copper_trs_from_files,
+    calculate_trs,
+    structure_from_3d_coordinates,
+)
 
 
 class TRSScoreTests(unittest.TestCase):
@@ -100,6 +109,54 @@ class TRSScoreTests(unittest.TestCase):
         """
 
         result = calculate_3d_trs(before, after, metal_cutoff=3.0)
+
+        self.assertGreater(result.total, 0.0)
+        self.assertEqual(result.components.coordination_number, 1.0)
+
+    def test_mol2_atom_section_can_be_read(self):
+        mol2_text = """
+@<TRIPOS>MOLECULE
+P1
+    3    0    0    0    0
+SMALL
+NO_CHARGES
+
+@<TRIPOS>ATOM
+    1 OD1 0.0 0.0 0.0 O.co2 1 ASP232 0.0000
+    2 NZ  6.0 0.0 0.0 N.4   2 LYS293 1.0000
+    3 CU  2.4 0.0 0.0 Cu    3 CU401  0.0000
+@<TRIPOS>BOND
+"""
+
+        structure = AtomStructure.from_mol2(mol2_text)
+
+        self.assertEqual(len(structure.atoms), 3)
+        self.assertEqual(structure.atoms[2].element, "Cu")
+
+    def test_copper_trs_can_read_before_after_files(self):
+        before_text = """
+@<TRIPOS>MOLECULE
+P1_before
+@<TRIPOS>ATOM
+    1 OD1 0.0 0.0 0.0 O.co2 1 ASP232 0.0000
+    2 NZ  6.0 0.0 0.0 N.4   2 LYS293 1.0000
+"""
+        after_text = """
+@<TRIPOS>MOLECULE
+P1_after
+@<TRIPOS>ATOM
+    1 OD1 0.0 0.0 0.0 O.co2 1 ASP232 0.0000
+    2 NZ  6.0 0.0 0.0 N.4   2 LYS293 1.0000
+    3 CU  2.4 0.0 0.0 Cu    3 CU401  0.0000
+"""
+
+        with TemporaryDirectory() as tmpdir:
+            before_path = Path(tmpdir) / "P1_before.mol2"
+            after_path = Path(tmpdir) / "P1_after.mol2"
+            before_path.write_text(before_text, encoding="utf-8")
+            after_path.write_text(after_text, encoding="utf-8")
+
+            result = calculate_copper_trs_from_files(before_path, after_path)
 
         self.assertGreater(result.total, 0.0)
         self.assertEqual(result.components.coordination_number, 1.0)

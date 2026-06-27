@@ -2,15 +2,11 @@
 
 The public function, ``calculate_trs``, compares a protein structure before metal
 binding with a protein/metal structure after binding. Nodes are residue identifiers
-plus optional metal identifiers. Edges are undirected contacts/interactions.
+plus optional metal identifiers. Connections are undirected contacts/interactions.
 Coordinates are optional but enable geometry-based terms. Coordinates do not
-create connectivity by themselves: if two nodes have no declared interaction,
-there is no edge between them.
+create connectivity by themselves: if two nodes have no inferred interaction,
+there is no connection between them.
 """
-
-# VERY IMPORTANT: We need approximate Distance cutoffs (in angstroms) for metals connects. For now, arbitraty data is used.
-# Distance cuttoffs means: if two atoms are closer than this distance, count them as interacting/connected. 
-
 
 from __future__ import annotations
 
@@ -25,6 +21,12 @@ import numpy as np
 NodeId = str | int
 Edge = tuple[NodeId, NodeId]
 Coordinate = tuple[float, float, float]
+
+DEFAULT_CONTACT_CUTOFF = 4.5
+DEFAULT_METAL_CUTOFF = 3.0
+COPPER_METAL_CUTOFF = 2.8
+COPPER_CONTACT_CUTOFF = 4.5
+COPPER_DONOR_ELEMENTS = ("O", "N", "S")
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,37 @@ class AtomStructure:
                 )
             )
         return cls(tuple(atoms))
+
+    @classmethod
+    def from_mol2(cls, text: str) -> "AtomStructure":
+        """Parse the atom section from a TRIPOS/MOL2-style structure file."""
+
+        atom_lines: list[str] = []
+        in_atom_section = False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.upper() == "@<TRIPOS>ATOM":
+                in_atom_section = True
+                continue
+            if in_atom_section and stripped.startswith("@<TRIPOS>"):
+                break
+            if in_atom_section and stripped:
+                atom_lines.append(line)
+
+        if not atom_lines:
+            raise ValueError("No @<TRIPOS>ATOM section found.")
+        return cls.from_table("\n".join(atom_lines))
+
+    @classmethod
+    def from_file(cls, path: str | "Path") -> "AtomStructure":
+        """Read a coordinate table or TRIPOS/MOL2-style structure file."""
+
+        from pathlib import Path
+
+        text = Path(path).read_text(encoding="utf-8")
+        if "@<TRIPOS>ATOM" in text.upper():
+            return cls.from_mol2(text)
+        return cls.from_table(text)
 
 
 @dataclass(frozen=True)
@@ -265,8 +298,8 @@ def calculate_3d_trs(
     weights: Mapping[str, float] | None = None,
     metal_elements: Iterable[str] = ("Ca", "Zn", "Mg", "Fe", "Cu", "Mn", "Co", "Ni"),
     donor_elements: Iterable[str] = ("O", "N", "S"),
-    contact_cutoff: float = 4.5,
-    metal_cutoff: float = 3.0,
+    contact_cutoff: float = DEFAULT_CONTACT_CUTOFF,
+    metal_cutoff: float = DEFAULT_METAL_CUTOFF,
     default_ideal_angle: float | None = None,
 ) -> TRSResult:
     """Calculate TRS directly from exact 3D atom-coordinate tables.
@@ -274,7 +307,7 @@ def calculate_3d_trs(
     This keeps the input close to the CCDC-style table. Each atom is a node with
     its exact coordinates. Edges are inferred from 3D distances:
 
-    - metal-donor edges use ``metal_cutoff``
+    - metal-donor connections use ``metal_cutoff``
     - other heavy-atom contacts use ``contact_cutoff``
     - hydrogen-hydrogen contacts are ignored
     """
@@ -307,8 +340,8 @@ def structure_from_3d_coordinates(
     structure: AtomStructure,
     metal_elements: Iterable[str] = ("Ca", "Zn", "Mg", "Fe", "Cu", "Mn", "Co", "Ni"),
     donor_elements: Iterable[str] = ("O", "N", "S"),
-    contact_cutoff: float = 4.5,
-    metal_cutoff: float = 3.0,
+    contact_cutoff: float = DEFAULT_CONTACT_CUTOFF,
+    metal_cutoff: float = DEFAULT_METAL_CUTOFF,
 ) -> ProteinStructure:
     """Build an atom-level contact structure from exact 3D coordinates."""
 
@@ -342,6 +375,26 @@ def structure_from_3d_coordinates(
         edges=edges,
         coordinates=coordinates,
         metal_nodes=metal_nodes,
+    )
+
+
+def calculate_copper_trs_from_files(
+    before_path: str | "Path",
+    after_path: str | "Path",
+    weights: Mapping[str, float] | None = None,
+) -> TRSResult:
+    """Calculate TRS for a copper before/after structure-file pair."""
+
+    before = AtomStructure.from_file(before_path)
+    after = AtomStructure.from_file(after_path)
+    return calculate_3d_trs(
+        before,
+        after,
+        weights=weights,
+        metal_elements=("Cu",),
+        donor_elements=COPPER_DONOR_ELEMENTS,
+        metal_cutoff=COPPER_METAL_CUTOFF,
+        contact_cutoff=COPPER_CONTACT_CUTOFF,
     )
 
 
