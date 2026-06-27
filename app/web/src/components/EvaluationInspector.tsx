@@ -94,7 +94,7 @@ function TrsPanel({ evaluations }: { evaluations: EvaluationResult[] }) {
                   <span className="font-mono text-zinc-500">{value.toFixed(3)}</span>
                 </div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
-                  <div className="h-full rounded-full bg-emerald-300" style={{ width: `${Math.max(4, Math.min(100, value * 20))}%` }} />
+                  <div className="h-full rounded-full bg-emerald-300" style={{ width: `${componentWidth(value)}%` }} />
                 </div>
               </div>
             ))}
@@ -148,6 +148,11 @@ function asNumberRecord(value: unknown): Record<string, number> {
     Object.entries(value as Record<string, unknown>)
       .filter((entry): entry is [string, number] => typeof entry[1] === "number")
   );
+}
+
+function componentWidth(value: number) {
+  const normalized = value <= 1 ? value * 100 : value * 20;
+  return Math.max(4, Math.min(100, normalized));
 }
 
 function formatDate(value: string) {

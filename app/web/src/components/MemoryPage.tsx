@@ -167,6 +167,8 @@ function LoopInspector({
             {detail.loop.candidate.sequence}
           </div>
         </div>
+        <AgentPlanPanel detail={detail} />
+        <CandidateArtifactsPanel detail={detail} />
         <EvaluationInspector detail={detail} />
         <HumanInputPanel inputs={detail.loop.human_inputs} />
         <div className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-950 p-3">
@@ -210,6 +212,56 @@ function LoopInspector({
         </div>
       </div>
     </section>
+  );
+}
+
+function AgentPlanPanel({ detail }: { detail: LoopDetail }) {
+  const changeSet = detail.loop.change_set;
+  if (!changeSet) {
+    return (
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-sm text-zinc-500">
+        Loop 0 seed selected by Novacore pre-loop ranking.
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-medium text-zinc-500">Agent plan</div>
+        <span className="rounded-md border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 text-xs text-emerald-200">
+          {changeSet.author}
+        </span>
+      </div>
+      <div className="text-sm font-medium text-zinc-100">{changeSet.summary}</div>
+      <p className="text-sm leading-5 text-zinc-400">{changeSet.why}</p>
+      <div className="flex flex-wrap gap-2">
+        {changeSet.changes.map((change) => (
+          <span key={String(change.machine_diff)} className="rounded-md border border-zinc-700 px-2 py-1 font-mono text-xs text-zinc-300">
+            {String(change.machine_diff)}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CandidateArtifactsPanel({ detail }: { detail: LoopDetail }) {
+  const artifacts = [...detail.loop.candidate.structure_artifacts, ...detail.loop.candidate.boltz_artifacts];
+  if (!artifacts.length) return null;
+
+  return (
+    <div className="grid gap-2">
+      <div className="text-xs font-medium text-zinc-500">Candidate artifacts</div>
+      <div className="grid gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+        {artifacts.map((artifact) => (
+          <div key={`${artifact.kind}-${artifact.uri}`} className="grid gap-1 text-xs">
+            <div className="text-zinc-300">{artifact.kind}</div>
+            <div className="break-all font-mono text-zinc-500">{artifact.uri}</div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

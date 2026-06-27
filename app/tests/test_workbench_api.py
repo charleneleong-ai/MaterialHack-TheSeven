@@ -39,6 +39,7 @@ def test_parse_objective_returns_editable_defaults():
     assert payload["ph"] == 5.0
     assert payload["length"] == 72
     assert payload["seed_sources"] == ["ccdc_csd", "de_novo"]
+    assert [target["name"] for target in payload["optimization_targets"]] == ["trs_total", "plddt"]
 
 
 def test_create_run_builds_seed_and_requested_loops():
@@ -53,9 +54,13 @@ def test_create_run_builds_seed_and_requested_loops():
             "functions": ["bind"],
             "length": 60,
             "seed_count": 4,
-            "seed_sources": ["ccdc_csd", "de_novo"],
+            "seed_sources": ["ccdc_csd"],
             "target_score": 0.95,
             "loop_count": 2,
+            "optimization_targets": [
+                {"name": "trs_total", "target": 0.75, "comparator": "gte", "weight": 1.0},
+                {"name": "plddt", "target": 0.7, "comparator": "gte", "weight": 0.5},
+            ],
         },
     )
     response.raise_for_status()
@@ -67,6 +72,13 @@ def test_create_run_builds_seed_and_requested_loops():
     assert len(memory["nodes"]) == 3
     assert [node["index"] for node in memory["nodes"]] == [0, 1, 2]
     assert any("verifier" in node["evaluation_kinds"] for node in memory["nodes"])
+    assert [goal["name"] for goal in memory["objective"]["goals"]] == ["trs_total", "plddt"]
+    loop_0 = client.get(f"/api/runs/{payload['run_id']}/loops/{memory['root_loop_id']}").json()
+    artifact_uris = [
+        artifact["uri"]
+        for artifact in loop_0["loop"]["candidate"]["structure_artifacts"]
+    ]
+    assert any(uri.startswith("zip://ligands_10000.zip!/ligands_10000/Zn/") for uri in artifact_uris)
 
 
 def test_seed_only_run_mode_stops_after_loop_zero():
@@ -124,6 +136,7 @@ def test_event_log_replays_as_sse_payloads():
     assert any(payload.startswith("event: evaluation_attached") for payload in sse_payloads)
     assert any('"evaluation_kind": "screening"' in payload for payload in sse_payloads)
     assert any('"evaluation_kind": "verifier"' in payload for payload in sse_payloads)
+    assert any('"evaluator_name": "trs"' in payload for payload in sse_payloads)
 
 
 def test_rollback_marks_descendants_abandoned_and_emits_event():

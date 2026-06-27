@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from materialhack_memory import (
     ArtifactRef,
@@ -19,6 +20,8 @@ from materialhack_memory import (
     SeedCandidatePool,
     SeedSelectionDecision,
 )
+
+from materialhack_agent.ligand_catalog import select_ligand_model
 
 
 AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
@@ -38,8 +41,10 @@ class SeedFlowConfig:
     target_score: float = 0.8
     max_loops: int | None = 2
     rng_seed: int = 7
-    created_by: str = "WF"
+    created_by: str = "Novacore"
     seed_sources: tuple[CandidateOrigin, ...] = (CandidateOrigin.CCDC_CSD, CandidateOrigin.DE_NOVO)
+    optimization_goals: tuple[MetricGoal, ...] | None = None
+    ccdc_ligand_zip_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,7 @@ def create_seeded_run(
         parsed=parsed,
         target_score=config.target_score,
         max_loops=config.max_loops,
+        goals=config.optimization_goals,
     )
     conditions = to_conditions(parsed)
     candidates = generate_seed_candidates(parsed, config=config)
@@ -94,15 +100,16 @@ def create_seeded_run(
         pool_id=pool.pool_id,
         selected_seed_candidate_id=selected_seed_candidate_id,
         rationale=(
-            "Selected the top ranked WF pre-loop seed by verifier_score, then "
-            "screen_score and plddt as deterministic tie breakers."
+            "Selected the top ranked Novacore pre-loop seed by screening score, "
+            "then pLDDT and pTM as deterministic tie breakers."
         ),
         selected_by=config.created_by,
-        selection_method="stubbed_screening_verifier_rank",
+        selection_method="novacore_screening_boltz_rank",
         ranked_seed_candidate_ids=ranked_seed_candidate_ids,
         metadata={
             "stub": True,
-            "ranking_metric_order": ["verifier_score", "screen_score", "plddt"],
+            "agent": "Novacore",
+            "ranking_metric_order": ["screen_score", "plddt", "ptm"],
         },
     )
     run = repository.create_run_from_seed_selection(decision_id=decision.decision_id)
@@ -145,17 +152,11 @@ def to_design_objective(
     parsed: ParsedObjective,
     target_score: float,
     max_loops: int | None,
+    goals: tuple[MetricGoal, ...] | None = None,
 ) -> DesignObjective:
     return DesignObjective(
         description=objective_text,
-        goals=(
-            MetricGoal(
-                name="verifier_score",
-                target=target_score,
-                comparator="gte",
-                description="High-fidelity verifier score for the active design loop.",
-            ),
-        ),
+        goals=goals or _default_goals(target_score),
         max_loops=max_loops,
         custom={
             "target": parsed.target,
@@ -183,12 +184,16 @@ def generate_seed_candidates(parsed: ParsedObjective, *, config: SeedFlowConfig)
     for index in range(config.seed_count):
         seed_id = f"seed_{index + 1:03d}"
         origin = config.seed_sources[index % len(config.seed_sources)]
+        ligand_ref = (
+            select_ligand_model(parsed.target, archive_path=config.ccdc_ligand_zip_path, index=index)
+            if origin == CandidateOrigin.CCDC_CSD
+            else None
+        )
         length = max(20, parsed.length + rng.randint(-5, 5))
         sequence = _generate_sequence(rng, length)
         plddt = round(rng.uniform(0.55, 0.92), 3)
         ptm = round(rng.uniform(0.35, 0.88), 3)
         screen_score = round(0.55 * plddt + 0.45 * ptm, 3)
-        verifier_score = round(min(0.95, 0.25 + 0.5 * screen_score + rng.uniform(0.0, 0.18)), 3)
 
         candidates.append(
             SeedCandidate(
@@ -196,9 +201,29 @@ def generate_seed_candidates(parsed: ParsedObjective, *, config: SeedFlowConfig)
                 sequence=sequence,
                 origin=origin,
                 source_database="CCDC/CSD" if origin == CandidateOrigin.CCDC_CSD else None,
-                source_id=f"CSD-STUB-{index + 1:04d}" if origin == CandidateOrigin.CCDC_CSD else None,
+                source_id=ligand_ref.source_id if ligand_ref is not None else (
+                    f"CSD-STUB-{index + 1:04d}" if origin == CandidateOrigin.CCDC_CSD else None
+                ),
                 name=f"{parsed.target}_seed_{index + 1}",
                 structure_artifacts=(
+                    *(
+                        (
+                            ArtifactRef(
+                                uri=ligand_ref.uri,
+                                kind="ccdc_ligand_model",
+                                format="mol2",
+                                metadata={
+                                    "archive": Path(config.ccdc_ligand_zip_path).name
+                                    if config.ccdc_ligand_zip_path
+                                    else None,
+                                    "entry_name": ligand_ref.entry_name,
+                                    "metal": ligand_ref.metal,
+                                },
+                            ),
+                        )
+                        if ligand_ref is not None
+                        else ()
+                    ),
                     ArtifactRef(
                         uri=f"memory://preloop/{seed_id}/structure.cif",
                         kind="candidate_structure",
@@ -246,18 +271,20 @@ def generate_seed_candidates(parsed: ParsedObjective, *, config: SeedFlowConfig)
                     ),
                     EvaluationResult(
                         kind=EvaluationKind.VERIFIER,
-                        evaluator_name="wf-preloop-verifier-stub",
-                        evaluator_version="stub.v1",
-                        metrics=(MetricValue(name="verifier_score", value=verifier_score, higher_is_better=True),),
-                        passed=False,
-                        summary="Deterministic seed verifier placeholder.",
-                        metadata={"stub": True},
+                        evaluator_name="verifier-mcp-pending",
+                        evaluator_version=None,
+                        metrics=(),
+                        passed=None,
+                        summary="Verifier MCP server is not configured yet; no verifier score was produced.",
+                        metadata={"adapter_status": "pending", "agent": "Novacore"},
                     ),
                 ),
                 metadata={
                     "target": parsed.target,
                     "ph": parsed.ph,
                     "functions": list(parsed.functions),
+                    "agent": "Novacore",
+                    "ccdc_ligand_model": ligand_ref.uri if ligand_ref is not None else None,
                     "stub": True,
                 },
             )
@@ -269,13 +296,32 @@ def rank_seed_candidates(candidates: tuple[SeedCandidate, ...]) -> tuple[str, ..
     ranked = sorted(
         candidates,
         key=lambda candidate: (
-            _metric(candidate, "verifier_score"),
             _metric(candidate, "screen_score"),
             _metric(candidate, "plddt"),
+            _metric(candidate, "ptm"),
         ),
         reverse=True,
     )
     return tuple(candidate.seed_candidate_id for candidate in ranked)
+
+
+def _default_goals(target_score: float) -> tuple[MetricGoal, ...]:
+    return (
+        MetricGoal(
+            name="trs_total",
+            target=target_score,
+            comparator="gte",
+            weight=1.0,
+            description="TRS total screening score for metal-binding topology.",
+        ),
+        MetricGoal(
+            name="plddt",
+            target=0.7,
+            comparator="gte",
+            weight=0.5,
+            description="Boltz structure confidence target.",
+        ),
+    )
 
 
 _KNOWN_TARGETS = [

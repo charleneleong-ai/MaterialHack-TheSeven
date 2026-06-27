@@ -1,13 +1,15 @@
-# MaterialHack Agent App
+# Novacore Agent App
 
 This folder is the integration package for the runnable agentic protein-design
 system. It composes the current branch work without changing branch ownership:
 
-- WF-style pre-loop seed sourcing from either de novo generation or CCDC/CSD,
-  followed by scoring, ranking, and selection.
+- Novacore pre-loop seed sourcing from either de novo generation or local
+  CCDC/CSD ligand models in `../ligands_10000.zip`, followed by scoring,
+  ranking, and selection.
 - `memory/` durable seed-selection and loop memory, including `loop_0`.
-- `loop_runner/` post-`loop_0` optimization orchestration.
-- Future adapter slots for real Boltz, TRS screening, and verifier tools.
+- `loop_runner/` post-`loop_0` optimization orchestration with Novacore
+  adapters for Codex-style planning, Boltz CLI preparation, TRS screening, and
+  pending verifier MCP status.
 
 ## Do We Have Enough?
 
@@ -16,20 +18,23 @@ to run a complete stubbed system:
 
 ```text
 objective
-  -> pre-loop seed candidates from de novo or CCDC/CSD
+  -> pre-loop seed candidates from de novo or local CCDC/CSD ligand models
   -> seed ranking and selection
   -> memory SeedCandidatePool + SeedSelectionDecision
   -> durable loop_0
-  -> loop_runner optimization loops
-  -> memory visualization snapshot
+  -> forced Novacore loop_runner optimization loops
+  -> Boltz artifacts + TRS output + pending verifier record
+  -> memory visualization snapshot in the Novacore UI
 ```
 
 The remaining production gaps are adapter implementations, not orchestration
 shape:
 
-- TRS-backed screening adapter from the `TRS` branch.
-- Real verifier/high-fidelity oracle.
-- Real Boltz generation/evaluation adapter.
+- Production TRS-backed screening adapter from the `TRS` branch.
+- Verifier MCP server/high-fidelity oracle. Until that exists, Novacore records
+  a `verifier-mcp-pending` evaluation so the UI can show the missing step.
+- Real Boltz CLI execution. The current adapter records the command and
+  deterministic fallback metrics unless external execution is enabled.
 - Durable TuringDB-backed repository configuration for deployed runs.
 
 ## Boltz Protocol
@@ -56,7 +61,7 @@ python3 -m materialhack_agent \
 The command runs without model credentials. Stub outputs are explicitly marked
 as stubs in memory metadata and evaluator names.
 
-## Run The Workbench
+## Run Novacore
 
 Start the API:
 
@@ -77,7 +82,9 @@ FastAPI process on port `8000`.
 
 ## Package Layout
 
-- `src/materialhack_agent/seed_flow.py` owns the WF-to-memory pre-loop handoff.
+- `src/materialhack_agent/seed_flow.py` owns the Novacore-to-memory pre-loop handoff.
+- `src/materialhack_agent/novacore.py` owns the Novacore Codex-agent persona and loop adapters.
+- `src/materialhack_agent/ligand_catalog.py` resolves local CCDC/CSD `.mol2` models from `ligands_10000.zip`.
 - `src/materialhack_agent/application.py` composes seed flow and loop runner.
 - `src/materialhack_agent/workbench_api.py` exposes the FastAPI workbench API.
 - `src/materialhack_agent/observable_memory.py` emits workbench events from memory writes.

@@ -12,7 +12,7 @@ DEFAULT_OBJECTIVE = "design a protein that binds Zn2+ at pH 5 and can polymerize
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the MaterialHack protein-design agent app.")
+    parser = argparse.ArgumentParser(description="Run the Novacore protein-design agent app.")
     parser.add_argument(
         "objective",
         nargs="?",
@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
         "--target-score",
         type=float,
         default=0.8,
-        help="target verifier_score stored on the design objective",
+        help="target TRS score stored on the design objective",
     )
     parser.add_argument(
         "--seed",
@@ -70,7 +70,7 @@ def main() -> None:
     decision = result.seed_flow.decision
     active_node = next(node for node in result.snapshot.nodes if node.is_active)
 
-    print("MaterialHack Agent App")
+    print("Novacore Agent App")
     print(f"  run_id          : {result.run_id}")
     print(f"  seed_pool_id    : {result.seed_flow.pool.pool_id}")
     print(f"  selected_seed   : {seed.seed_candidate_id} ({seed.origin.value})")
@@ -82,4 +82,3 @@ def main() -> None:
     if result.runner_result is not None:
         print(f"  loops_completed : {result.runner_result.loops_completed}")
         print(f"  stop_reason     : {result.runner_result.stop_reason.value}")
-

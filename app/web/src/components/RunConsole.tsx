@@ -3,9 +3,9 @@ import type { ReactNode } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowRight, Beaker, Loader2, Play, SlidersHorizontal } from "lucide-react";
+import { ArrowRight, Beaker, Loader2, Play, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
 import { createRun, createRunEventSource, decodeEvent, parseObjective } from "../api";
-import type { CreateRunPayload, ObjectiveParameters, RunMode, SeedSource, WorkbenchEvent } from "../types";
+import type { CreateRunPayload, GoalComparator, ObjectiveParameters, OptimizationTarget, RunMode, SeedSource, WorkbenchEvent } from "../types";
 import EventFeed from "./EventFeed";
 
 const DEFAULT_OBJECTIVE = "design a protein that binds Zn2+ at pH 5 and can polymerize";
@@ -73,11 +73,14 @@ export default function RunConsole() {
   function submitRun(event: FormEvent) {
     event.preventDefault();
     if (!parameters) return;
+    const optimizationTargets = parameters.optimization_targets.filter((target) => target.name.trim());
     const payload: CreateRunPayload = {
       objective,
       ...parameters,
       functions: parameters.functions.filter(Boolean),
       loop_count: runMode === "seed_only" ? 0 : parameters.loop_count,
+      target_score: optimizationTargets.find((target) => target.name === "trs_total")?.target ?? parameters.target_score,
+      optimization_targets: optimizationTargets,
       run_mode: runMode
     };
     runMutation.mutate(payload);
@@ -90,7 +93,7 @@ export default function RunConsole() {
           <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
             <div className="flex items-center gap-2">
               <Beaker className="h-4 w-4 text-emerald-300" />
-              <h1 className="text-sm font-semibold text-zinc-100">Run console</h1>
+              <h1 className="text-sm font-semibold text-zinc-100">Novacore console</h1>
             </div>
             <StatusPill status={latestStatus} />
           </div>
@@ -143,6 +146,7 @@ export default function RunConsole() {
         {parameters ? (
           <>
             <ParameterPanel parameters={parameters} onChange={setParameters} />
+            <OptimizationTargetsPanel parameters={parameters} onChange={setParameters} />
             <RunModeTabs value={runMode} onChange={setRunMode} />
           </>
         ) : (
@@ -177,7 +181,7 @@ export function RunModeTabs({ value, onChange }: { value: RunMode; onChange: (va
       <Tabs.Root value={value} onValueChange={(next) => onChange(next as RunMode)} className="p-4">
         <Tabs.List className="grid max-w-md grid-cols-2 rounded-lg border border-zinc-700 bg-zinc-950 p-1">
           <Tabs.Trigger value="seed_and_loop" className="h-8 rounded-md px-2 text-xs font-medium text-zinc-400 transition data-[state=active]:bg-emerald-400 data-[state=active]:text-zinc-950">
-            Seed + loops
+            Novacore e2e
           </Tabs.Trigger>
           <Tabs.Trigger value="seed_only" className="h-8 rounded-md px-2 text-xs font-medium text-zinc-400 transition data-[state=active]:bg-emerald-400 data-[state=active]:text-zinc-950">
             Seed only
@@ -213,9 +217,6 @@ export function ParameterPanel({
         <Field label="Length">
           <input type="number" min={1} value={parameters.length} onChange={(event) => patch({ length: Number(event.target.value) })} className="field-input" />
         </Field>
-        <Field label="Target score">
-          <input type="number" min={0} max={1} step="0.01" value={parameters.target_score} onChange={(event) => patch({ target_score: Number(event.target.value) })} className="field-input" />
-        </Field>
         <Field label="Functions">
           <input value={parameters.functions.join(", ")} onChange={(event) => patch({ functions: event.target.value.split(",").map((item) => item.trim()) })} className="field-input" />
         </Field>
@@ -239,6 +240,85 @@ export function ParameterPanel({
             </button>
           </div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+export function OptimizationTargetsPanel({
+  parameters,
+  onChange
+}: {
+  parameters: ObjectiveParameters;
+  onChange: (parameters: ObjectiveParameters) => void;
+}) {
+  function patchTarget(index: number, update: Partial<OptimizationTarget>) {
+    const next = parameters.optimization_targets.map((target, targetIndex) =>
+      targetIndex === index ? { ...target, ...update } : target
+    );
+    onChange({ ...parameters, optimization_targets: next });
+  }
+
+  function addTarget() {
+    onChange({
+      ...parameters,
+      optimization_targets: [
+        ...parameters.optimization_targets,
+        { name: "verifier_score", target: 0.8, comparator: "gte", weight: 1, description: "Future verifier MCP score." }
+      ]
+    });
+  }
+
+  function removeTarget(index: number) {
+    onChange({
+      ...parameters,
+      optimization_targets: parameters.optimization_targets.filter((_, targetIndex) => targetIndex !== index)
+    });
+  }
+
+  return (
+    <section className="rounded-lg border border-zinc-800 bg-zinc-900/70">
+      <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 py-3">
+        <h2 className="text-sm font-semibold text-zinc-100">Optimization targets</h2>
+        <button type="button" onClick={addTarget} className="inline-flex h-8 items-center gap-2 rounded-lg border border-zinc-700 px-2.5 text-xs text-zinc-100 hover:bg-zinc-800">
+          <Plus className="h-3.5 w-3.5" />
+          Add target
+        </button>
+      </div>
+      <div className="grid gap-2 p-4">
+        {parameters.optimization_targets.length ? (
+          parameters.optimization_targets.map((target, index) => (
+            <div key={`${target.name}-${index}`} className="grid gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-3 lg:grid-cols-[minmax(0,1.4fr)_120px_120px_100px_auto]">
+              <label className="grid gap-1">
+                <span className="text-[11px] font-medium text-zinc-500">Metric</span>
+                <input value={target.name} onChange={(event) => patchTarget(index, { name: event.target.value })} className="field-input" />
+              </label>
+              <label className="grid gap-1">
+                <span className="text-[11px] font-medium text-zinc-500">Comparator</span>
+                <select value={target.comparator} onChange={(event) => patchTarget(index, { comparator: event.target.value as GoalComparator })} className="field-input">
+                  <option value="gte">At least</option>
+                  <option value="lte">At most</option>
+                  <option value="eq">Equals</option>
+                </select>
+              </label>
+              <label className="grid gap-1">
+                <span className="text-[11px] font-medium text-zinc-500">Target</span>
+                <input type="number" step="0.01" value={target.target} onChange={(event) => patchTarget(index, { target: Number(event.target.value) })} className="field-input" />
+              </label>
+              <label className="grid gap-1">
+                <span className="text-[11px] font-medium text-zinc-500">Weight</span>
+                <input type="number" min={0} step="0.1" value={target.weight} onChange={(event) => patchTarget(index, { weight: Number(event.target.value) })} className="field-input" />
+              </label>
+              <button type="button" onClick={() => removeTarget(index)} className="mt-5 inline-flex h-9 items-center justify-center rounded-lg border border-zinc-700 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100" aria-label={`Remove ${target.name}`}>
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))
+        ) : (
+          <div className="rounded-lg border border-dashed border-zinc-800 p-4 text-sm text-zinc-500">
+            Add at least one metric target before running Novacore.
+          </div>
+        )}
       </div>
     </section>
   );

@@ -3,12 +3,14 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
 
-from materialhack_loop_runner import LoopRunnerResult, ProteinDesignLoopRunner
-from materialhack_memory import CandidateOrigin, LoopRecord, MemoryRepository, to_jsonable
+from materialhack_loop_runner import LoopRunnerResult
+from materialhack_memory import CandidateOrigin, LoopRecord, MemoryRepository, MetricGoal, to_jsonable
 
+from materialhack_agent.novacore import NOVACORE_AGENT_NAME, build_novacore_runner
 from materialhack_agent.observable_memory import ObservableInMemoryProteinMemoryRepository
 from materialhack_agent.seed_flow import (
     ParsedObjective,
@@ -51,6 +53,22 @@ class ObjectiveParameters:
     seed_sources: tuple[str, ...] = ("ccdc_csd", "de_novo")
     target_score: float = 0.8
     loop_count: int = 2
+    optimization_targets: tuple[MetricGoal, ...] = (
+        MetricGoal(
+            name="trs_total",
+            target=0.8,
+            comparator="gte",
+            weight=1.0,
+            description="TRS total screening score.",
+        ),
+        MetricGoal(
+            name="plddt",
+            target=0.7,
+            comparator="gte",
+            weight=0.5,
+            description="Boltz confidence score.",
+        ),
+    )
 
 
 @dataclass
@@ -83,6 +101,7 @@ class WorkbenchService:
         seed_sources: Iterable[str],
         target_score: float,
         loop_count: int,
+        optimization_targets: Iterable[MetricGoal] | None = None,
         run_mode: str = "seed_and_loop",
         rng_seed: int = 7,
     ) -> tuple[str, str]:
@@ -92,6 +111,7 @@ class WorkbenchService:
             raise ValueError("run_mode must be seed_and_loop or seed_only")
 
         requested_loop_count = loop_count if run_mode == "seed_and_loop" else 0
+        goals = tuple(optimization_targets or ()) or self._default_optimization_targets(target_score)
 
         parsed = ParsedObjective(
             target=target,
@@ -105,6 +125,8 @@ class WorkbenchService:
             max_loops=requested_loop_count,
             rng_seed=rng_seed,
             seed_sources=self._candidate_origins(seed_sources),
+            optimization_goals=goals,
+            ccdc_ligand_zip_path=str(self._ligand_archive_path()),
         )
         seed_flow = create_seeded_run(self.memory, objective, config=config, parsed=parsed)
         run_id = seed_flow.run.run_id
@@ -121,6 +143,8 @@ class WorkbenchService:
                 "selected_seed_candidate_id": seed_flow.selected_seed.seed_candidate_id,
                 "requested_loops": requested_loop_count,
                 "run_mode": run_mode,
+                "agent": NOVACORE_AGENT_NAME,
+                "optimization_targets": goals,
             },
         )
         self.event_hub.publish(
@@ -188,7 +212,7 @@ class WorkbenchService:
         try:
             result: LoopRunnerResult | None = None
             if loop_count > 0:
-                runner = ProteinDesignLoopRunner(memory=self.memory)
+                runner = build_novacore_runner(memory=self.memory)
                 if start_loop_id:
                     result = runner.continue_from_loop(job.run_id, start_loop_id, loop_count=loop_count)
                 else:
@@ -236,3 +260,26 @@ class WorkbenchService:
         if not origins:
             raise ValueError("seed_sources must include ccdc_csd, de_novo, or both")
         return origins
+
+    @staticmethod
+    def _default_optimization_targets(target_score: float) -> tuple[MetricGoal, ...]:
+        return (
+            MetricGoal(
+                name="trs_total",
+                target=target_score,
+                comparator="gte",
+                weight=1.0,
+                description="TRS total screening score.",
+            ),
+            MetricGoal(
+                name="plddt",
+                target=0.7,
+                comparator="gte",
+                weight=0.5,
+                description="Boltz confidence score.",
+            ),
+        )
+
+    @staticmethod
+    def _ligand_archive_path() -> Path:
+        return Path(__file__).resolve().parents[3] / "ligands_10000.zip"

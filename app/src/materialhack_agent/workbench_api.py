@@ -10,13 +10,32 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from materialhack_memory import to_jsonable
+from materialhack_memory import MetricGoal, to_jsonable
 
 from materialhack_agent.workbench_service import WorkbenchService
 
 
 class ParseObjectiveRequest(BaseModel):
     objective: str = Field(min_length=1)
+
+
+class OptimizationTargetPayload(BaseModel):
+    name: str = Field(min_length=1)
+    target: float
+    comparator: Literal["gte", "lte", "eq"] = "gte"
+    weight: float = 1.0
+    unit: str | None = None
+    description: str | None = None
+
+    def to_metric_goal(self) -> MetricGoal:
+        return MetricGoal(
+            name=self.name,
+            target=self.target,
+            comparator=self.comparator,
+            weight=self.weight,
+            unit=self.unit,
+            description=self.description,
+        )
 
 
 class ParseObjectiveResponse(BaseModel):
@@ -28,6 +47,7 @@ class ParseObjectiveResponse(BaseModel):
     seed_sources: list[str]
     target_score: float
     loop_count: int
+    optimization_targets: list[OptimizationTargetPayload]
 
 
 class CreateRunRequest(BaseModel):
@@ -40,6 +60,7 @@ class CreateRunRequest(BaseModel):
     seed_sources: list[Literal["ccdc_csd", "de_novo"]] = Field(default_factory=lambda: ["ccdc_csd", "de_novo"])
     target_score: float = Field(default=0.8, ge=0.0, le=1.0)
     loop_count: int = Field(default=2, ge=0)
+    optimization_targets: list[OptimizationTargetPayload] = Field(default_factory=list)
     run_mode: Literal["seed_and_loop", "seed_only"] = "seed_and_loop"
     rng_seed: int = 7
 
@@ -68,7 +89,7 @@ class RollbackRequest(BaseModel):
 
 
 service = WorkbenchService()
-app = FastAPI(title="MaterialHack Agent Workbench API")
+app = FastAPI(title="Novacore API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -91,13 +112,18 @@ def parse_objective_endpoint(request: ParseObjectiveRequest) -> ParseObjectiveRe
         seed_sources=list(parameters.seed_sources),
         target_score=parameters.target_score,
         loop_count=parameters.loop_count,
+        optimization_targets=[OptimizationTargetPayload(**to_jsonable(target)) for target in parameters.optimization_targets],
     )
 
 
 @app.post("/api/runs", response_model=CreateRunResponse)
 def create_run_endpoint(request: CreateRunRequest) -> CreateRunResponse:
     try:
-        run_id, job_id = service.create_run(**request.model_dump())
+        payload = request.model_dump(exclude={"optimization_targets"})
+        run_id, job_id = service.create_run(
+            **payload,
+            optimization_targets=tuple(target.to_metric_goal() for target in request.optimization_targets),
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return CreateRunResponse(run_id=run_id, job_id=job_id, status=service.get_job(job_id).status.value)

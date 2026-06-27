@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
-from materialhack_loop_runner import LoopRunnerResult, ProteinDesignLoopRunner
+from materialhack_loop_runner import LoopRunnerResult
 from materialhack_memory import (
     InMemoryProteinMemoryRepository,
     MemoryRepository,
     RunVisualizationSnapshot,
 )
 
+from materialhack_agent.novacore import build_novacore_runner
 from materialhack_agent.seed_flow import SeedFlowConfig, SeedFlowResult, create_seeded_run
 
 
@@ -25,7 +27,7 @@ class AgentAppResult:
 
 @dataclass
 class MaterialHackAgentApp:
-    """Runnable composition of WF seed flow, durable memory, and loop runner."""
+    """Runnable Novacore composition of seed flow, durable memory, and loop runner."""
 
     memory: MemoryRepository | None = None
 
@@ -51,12 +53,13 @@ class MaterialHackAgentApp:
             target_score=target_score,
             max_loops=max_loops if max_loops is not None else loop_count,
             rng_seed=rng_seed,
+            ccdc_ligand_zip_path=str(Path(__file__).resolve().parents[3] / "ligands_10000.zip"),
         )
         seed_flow = create_seeded_run(self.memory, objective, config=config)
 
         runner_result: LoopRunnerResult | None = None
         if loop_count:
-            runner = ProteinDesignLoopRunner(memory=self.memory)
+            runner = build_novacore_runner(memory=self.memory)
             runner_result = runner.run_for_loops(seed_flow.run.run_id, loop_count)
 
         snapshot = self.memory.get_run_visualization(seed_flow.run.run_id)
@@ -65,4 +68,3 @@ class MaterialHackAgentApp:
             runner_result=runner_result,
             snapshot=snapshot,
         )
-

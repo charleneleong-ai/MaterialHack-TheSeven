@@ -1,5 +1,15 @@
 export type SeedSource = "ccdc_csd" | "de_novo";
 export type RunMode = "seed_and_loop" | "seed_only";
+export type GoalComparator = "gte" | "lte" | "eq";
+
+export interface OptimizationTarget {
+  name: string;
+  target: number;
+  comparator: GoalComparator;
+  weight: number;
+  unit?: string | null;
+  description?: string | null;
+}
 
 export interface ObjectiveParameters {
   target: string;
@@ -10,6 +20,7 @@ export interface ObjectiveParameters {
   seed_sources: SeedSource[];
   target_score: number;
   loop_count: number;
+  optimization_targets: OptimizationTarget[];
 }
 
 export interface CreateRunPayload extends ObjectiveParameters {

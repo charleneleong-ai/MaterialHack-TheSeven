@@ -29,8 +29,8 @@ function AppHeader() {
             <Activity className="h-4 w-4 text-emerald-300" />
           </div>
           <div>
-            <div className="text-sm font-semibold tracking-wide text-zinc-50">MaterialHack Agent</div>
-            <div className="text-xs text-zinc-500">Protein design workbench</div>
+            <div className="text-sm font-semibold tracking-wide text-zinc-50">Novacore</div>
+            <div className="text-xs text-zinc-500">Codex-run protein design</div>
           </div>
         </div>
         <nav className="flex items-center gap-2 text-sm">

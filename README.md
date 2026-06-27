@@ -6,13 +6,16 @@ several owned branches. The current integration shape is:
 - `memory/`: durable run, seed-selection, loop, rollback, and visualization
   records.
 - `loop_runner/`: LangGraph optimization runner after `loop_0`.
-- `app/`: runnable composition package that creates WF-style pre-loop seeds,
-  persists the selected seed as `loop_0`, and hands the run to the loop runner.
+- `app/`: Novacore composition package that creates pre-loop seeds from de novo
+  generation or local CCDC/CSD ligand models, persists the selected seed as
+  `loop_0`, and hands the run to the loop runner.
 - `BOLTZ_MODELS.md`: model-usage guidance for Boltz-family generation and
   evaluation adapters.
 
-The app is currently runnable with deterministic stubs. The real screener should
-come from the `TRS` branch, and the verifier remains an adapter slot.
+The app is currently runnable as Novacore with deterministic local fallbacks.
+Boltz CLI execution is represented by an adapter boundary, TRS-compatible
+screening results are stored in memory, and the verifier remains a pending MCP
+adapter slot until that server is added.
 
 Run the integration app from the repository root:
 
@@ -24,7 +27,7 @@ python3 -m materialhack_agent \
   --loops 2
 ```
 
-Run the web workbench with two processes:
+Run the Novacore web app with two processes:
 
 ```bash
 cd app
