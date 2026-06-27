@@ -9,6 +9,10 @@ Expected directory layouts:
 2. Separate directories:
    data/copper/before/P1.mol2
    data/copper/after/P1.mol2
+
+3. Current CIF layout:
+   data/copper/before binding/1BUG_apo.cif
+   data/copper/after binding/1bug.cif
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ from trs import calculate_copper_trs_from_files
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot copper TRS scores for structure pairs.")
     parser.add_argument("--input-dir", default="data/copper", help="Directory containing copper before/after files.")
-    parser.add_argument("--output-dir", default="outputs/copper_trs", help="Directory for CSV and high-resolution plots.")
+    parser.add_argument("--output-dir", default="plot_results", help="Directory for CSV and high-resolution plots.")
     parser.add_argument("--dpi", type=int, default=600, help="Output plot resolution.")
     args = parser.parse_args()
 
@@ -66,16 +70,26 @@ def main() -> None:
 
 
 def find_structure_pairs(input_dir: Path) -> list[tuple[str, Path, Path]]:
-    suffixes = {".mol2", ".txt", ".sdf"}
+    suffixes = {".cif", ".mol2", ".txt", ".sdf"}
     pairs: list[tuple[str, Path, Path]] = []
 
-    before_dir = input_dir / "before"
-    after_dir = input_dir / "after"
-    if before_dir.is_dir() and after_dir.is_dir():
+    directory_pairs = [
+        (input_dir / "before", input_dir / "after"),
+        (input_dir / "before binding", input_dir / "after binding"),
+    ]
+    for before_dir, after_dir in directory_pairs:
+        if not before_dir.is_dir() or not after_dir.is_dir():
+            continue
+        after_by_id = {
+            normalize_protein_id(after_path.stem): after_path
+            for after_path in after_dir.iterdir()
+            if after_path.suffix.lower() in suffixes
+        }
         for before_path in sorted(p for p in before_dir.iterdir() if p.suffix.lower() in suffixes):
-            after_path = after_dir / before_path.name
-            if after_path.exists():
-                pairs.append((before_path.stem, before_path, after_path))
+            protein_id = normalize_protein_id(before_path.stem)
+            after_path = after_by_id.get(protein_id)
+            if after_path:
+                pairs.append((protein_id.upper(), before_path, after_path))
 
     for before_path in sorted(input_dir.glob("*_before.*")):
         if before_path.suffix.lower() not in suffixes:
@@ -93,6 +107,14 @@ def find_structure_pairs(input_dir: Path) -> list[tuple[str, Path, Path]]:
             seen.add(key)
             unique_pairs.append((protein_id, before_path, after_path))
     return unique_pairs
+
+
+def normalize_protein_id(name: str) -> str:
+    normalized = name.lower()
+    for suffix in ("_apo", "-apo", "_before", "-before", "_after", "-after"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+    return normalized
 
 
 def write_summary_csv(rows: list[dict[str, object]], output_path: Path) -> None:

@@ -14,6 +14,7 @@ from collections import deque
 from dataclasses import dataclass, fields
 from itertools import combinations
 from math import acos, degrees, dist
+import shlex
 from typing import Iterable, Mapping, Sequence
 
 import numpy as np
@@ -27,6 +28,7 @@ DEFAULT_METAL_CUTOFF = 2.8
 COPPER_METAL_CUTOFF = 2.8
 COPPER_CONTACT_CUTOFF = 4.5
 COPPER_DONOR_ELEMENTS = ("O", "N", "S")
+SOLVENT_RESIDUES = {"HOH", "WAT", "DOD", "SOL"}
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,7 @@ class AtomRecord:
     residue_index: int
     residue_name: str
     charge: float = 0.0
+    node_label: str | None = None
 
     @property
     def coordinate(self) -> Coordinate:
@@ -49,6 +52,8 @@ class AtomRecord:
 
     @property
     def node_id(self) -> str:
+        if self.node_label:
+            return self.node_label
         return f"{self.residue_name}:{self.atom_name}:{self.atom_id}"
 
     @property
@@ -114,6 +119,67 @@ class AtomStructure:
         return cls.from_table("\n".join(atom_lines))
 
     @classmethod
+    def from_cif(cls, text: str) -> "AtomStructure":
+        """Parse atom coordinates from a CIF/mmCIF ``_atom_site`` loop."""
+
+        lines = text.splitlines()
+        atoms: list[AtomRecord] = []
+        index = 0
+        while index < len(lines):
+            if lines[index].strip() != "loop_":
+                index += 1
+                continue
+
+            index += 1
+            headers: list[str] = []
+            while index < len(lines) and lines[index].strip().startswith("_"):
+                headers.append(lines[index].strip())
+                index += 1
+
+            if not headers or not all(header.startswith("_atom_site.") for header in headers):
+                continue
+
+            header_index = {header: position for position, header in enumerate(headers)}
+            required = [
+                "_atom_site.id",
+                "_atom_site.type_symbol",
+                "_atom_site.label_atom_id",
+                "_atom_site.label_comp_id",
+                "_atom_site.Cartn_x",
+                "_atom_site.Cartn_y",
+                "_atom_site.Cartn_z",
+            ]
+            if any(header not in header_index for header in required):
+                raise ValueError("The _atom_site loop is missing required coordinate columns.")
+
+            while index < len(lines):
+                stripped = lines[index].strip()
+                if not stripped:
+                    index += 1
+                    continue
+                if stripped == "#" or stripped == "loop_" or stripped.startswith("_"):
+                    break
+
+                tokens = _split_cif_tokens(stripped)
+                while len(tokens) < len(headers) and index + 1 < len(lines):
+                    next_line = lines[index + 1].strip()
+                    if not next_line or next_line == "#" or next_line == "loop_" or next_line.startswith("_"):
+                        break
+                    index += 1
+                    tokens.extend(_split_cif_tokens(next_line))
+
+                if len(tokens) >= len(headers) and tokens[0] in {"ATOM", "HETATM"}:
+                    atom = _atom_record_from_cif_tokens(tokens, header_index)
+                    if _residue_component(atom) not in SOLVENT_RESIDUES:
+                        atoms.append(atom)
+                index += 1
+
+            if atoms:
+                return cls(tuple(atoms))
+
+        raise ValueError("No usable _atom_site coordinate rows found.")
+
+    @classmethod
     def from_file(cls, path: str | "Path") -> "AtomStructure":
         """Read a coordinate table or TRIPOS/MOL2-style structure file."""
 
@@ -122,6 +188,8 @@ class AtomStructure:
         text = Path(path).read_text(encoding="utf-8")
         if "@<TRIPOS>ATOM" in text.upper():
             return cls.from_mol2(text)
+        if "_atom_site." in text:
+            return cls.from_cif(text)
         return cls.from_table(text)
 
 
@@ -382,11 +450,19 @@ def calculate_copper_trs_from_files(
     before_path: str | "Path",
     after_path: str | "Path",
     weights: Mapping[str, float] | None = None,
+    binding_site_radius: float = 6.0,
 ) -> TRSResult:
     """Calculate TRS for a copper before/after structure-file pair."""
 
     before = AtomStructure.from_file(before_path)
     after = AtomStructure.from_file(after_path)
+    before, after = _select_matching_chains(before, after)
+    before, after = _select_metal_site_structures(
+        before,
+        after,
+        metal_elements=("Cu",),
+        radius=binding_site_radius,
+    )
     return calculate_3d_trs(
         before,
         after,
@@ -396,6 +472,136 @@ def calculate_copper_trs_from_files(
         metal_cutoff=COPPER_METAL_CUTOFF,
         contact_cutoff=COPPER_CONTACT_CUTOFF,
     )
+
+
+def _select_matching_chains(before: AtomStructure, after: AtomStructure) -> tuple[AtomStructure, AtomStructure]:
+    before_chains = sorted({_chain_id(atom) for atom in before.atoms if _chain_id(atom)})
+    after_chains = sorted({_chain_id(atom) for atom in after.atoms if _chain_id(atom)})
+    common_chains = [chain for chain in before_chains if chain in after_chains]
+    if not common_chains:
+        return before, after
+
+    selected_chain = common_chains[0]
+    before_atoms = tuple(atom for atom in before.atoms if _chain_id(atom) == selected_chain)
+    after_atoms = tuple(atom for atom in after.atoms if _chain_id(atom) == selected_chain)
+    if not before_atoms or not after_atoms:
+        return before, after
+    return AtomStructure(before_atoms), AtomStructure(after_atoms)
+
+
+def _select_metal_site_structures(
+    before: AtomStructure,
+    after: AtomStructure,
+    metal_elements: Iterable[str],
+    radius: float,
+) -> tuple[AtomStructure, AtomStructure]:
+    metal_set = {element.capitalize() for element in metal_elements}
+    metals = [atom for atom in after.atoms if atom.element in metal_set]
+    if not metals:
+        return before, after
+
+    before_residues = {atom.residue_name for atom in before.atoms}
+    selected_residues = {
+        atom.residue_name
+        for atom in after.atoms
+        if atom.element not in metal_set
+        and any(dist(atom.coordinate, metal.coordinate) <= radius for metal in metals)
+    }
+    selected_residues &= before_residues
+    if not selected_residues:
+        selected_residues = _nearest_matching_residues(before, after, metals, limit=12)
+
+    before_site = tuple(atom for atom in before.atoms if atom.residue_name in selected_residues)
+    after_site = tuple(
+        atom
+        for atom in after.atoms
+        if atom.residue_name in selected_residues or atom.element in metal_set
+    )
+    if not before_site or not after_site:
+        return AtomStructure(tuple()), AtomStructure(tuple(metals))
+    return AtomStructure(before_site), AtomStructure(after_site)
+
+
+def _nearest_matching_residues(
+    before: AtomStructure,
+    after: AtomStructure,
+    metals: Sequence[AtomRecord],
+    limit: int,
+) -> set[str]:
+    before_residues = {atom.residue_name for atom in before.atoms}
+    residue_distances: dict[str, float] = {}
+    for atom in after.atoms:
+        if atom.element in {"H"} or atom.residue_name not in before_residues:
+            continue
+        nearest = min(dist(atom.coordinate, metal.coordinate) for metal in metals)
+        residue_distances[atom.residue_name] = min(nearest, residue_distances.get(atom.residue_name, nearest))
+    return {
+        residue
+        for residue, _ in sorted(residue_distances.items(), key=lambda item: item[1])[:limit]
+    }
+
+
+def _chain_id(atom: AtomRecord) -> str:
+    return atom.residue_name.split(":", maxsplit=1)[0] if ":" in atom.residue_name else ""
+
+
+def _residue_component(atom: AtomRecord) -> str:
+    residue = atom.residue_name.split(":", maxsplit=1)[-1]
+    return "".join(char for char in residue if not char.isdigit()).upper()
+
+
+def _split_cif_tokens(line: str) -> list[str]:
+    return shlex.split(line, posix=False)
+
+
+def _atom_record_from_cif_tokens(tokens: Sequence[str], header_index: Mapping[str, int]) -> AtomRecord:
+    atom_id = int(_clean_cif_value(tokens[header_index["_atom_site.id"]]))
+    atom_name = _clean_cif_value(tokens[header_index["_atom_site.label_atom_id"]])
+    element = _clean_cif_value(tokens[header_index["_atom_site.type_symbol"]])
+    component = _clean_cif_value(_optional_cif_value(tokens, header_index, "_atom_site.auth_comp_id")) or _clean_cif_value(
+        tokens[header_index["_atom_site.label_comp_id"]]
+    )
+    sequence_text = _clean_cif_value(_optional_cif_value(tokens, header_index, "_atom_site.auth_seq_id")) or _clean_cif_value(
+        _optional_cif_value(tokens, header_index, "_atom_site.label_seq_id")
+    )
+    chain = _clean_cif_value(_optional_cif_value(tokens, header_index, "_atom_site.auth_asym_id")) or _clean_cif_value(
+        _optional_cif_value(tokens, header_index, "_atom_site.label_asym_id")
+    )
+    auth_atom = _clean_cif_value(_optional_cif_value(tokens, header_index, "_atom_site.auth_atom_id")) or atom_name
+    residue_index = _safe_int(sequence_text, fallback=atom_id)
+    residue_name = f"{chain}:{component}{sequence_text}" if chain else f"{component}{sequence_text}"
+    node_label = f"{residue_name}:{auth_atom}"
+    return AtomRecord(
+        atom_id=atom_id,
+        atom_name=auth_atom,
+        x=float(_clean_cif_value(tokens[header_index["_atom_site.Cartn_x"]])),
+        y=float(_clean_cif_value(tokens[header_index["_atom_site.Cartn_y"]])),
+        z=float(_clean_cif_value(tokens[header_index["_atom_site.Cartn_z"]])),
+        atom_type=element,
+        residue_index=residue_index,
+        residue_name=residue_name,
+        charge=0.0,
+        node_label=node_label,
+    )
+
+
+def _optional_cif_value(tokens: Sequence[str], header_index: Mapping[str, int], key: str) -> str:
+    position = header_index.get(key)
+    if position is None or position >= len(tokens):
+        return ""
+    return tokens[position]
+
+
+def _clean_cif_value(value: str) -> str:
+    cleaned = value.strip().strip("'\"")
+    return "" if cleaned in {".", "?"} else cleaned
+
+
+def _safe_int(value: str, fallback: int) -> int:
+    try:
+        return int(float(value))
+    except ValueError:
+        return fallback
 
 
 def _normalize_edge(a: NodeId, b: NodeId) -> Edge:
