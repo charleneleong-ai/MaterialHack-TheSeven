@@ -31,6 +31,15 @@ shape:
 - Real Boltz generation/evaluation adapter.
 - Durable TuringDB-backed repository configuration for deployed runs.
 
+## Boltz Protocol
+
+The Boltz protocol stays at the repository root in
+[`BOLTZ_MODELS.md`](../BOLTZ_MODELS.md) because it is a cross-cutting contract
+for WF seed selection, memory artifact storage, TRS screening inputs, and the
+post-`loop_0` runner. App adapters that call Boltz or BoltzGen should follow
+that file's artifact, failure, metrics, and mmCIF conventions instead of
+inventing an app-local protocol.
+
 ## Run Locally
 
 From the repository root:
