@@ -14,7 +14,7 @@ repo on first use (requires `uv` on PATH). No install or vendoring.
 
 ![touchstone verifier stack](touchstone-verifier-stack.png)
 
-*Conceptual architecture (the geometry tier also includes the nVECSUM symmetry + polyhedron-shape checks listed below).*
+*Candidate → intrinsic checks (geometry: z-score · bond-valence · nVECSUM · polyhedron shape · Mogul; + precedent / expression / physics / dynamics / thermostability / selectivity) → cross-verification (independent co-fold) → consensus → reward / design loop.*
 
 Defense-in-depth — independent methods across complementary axes; each design gets a
 trust/weak/defer per tier, rolled into one `consensus` (a single `defer` collapses it):
