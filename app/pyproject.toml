@@ -1,0 +1,20 @@
+[project]
+name = "materialhack-agent"
+version = "0.1.0"
+description = "Application composition layer for the MaterialHack protein-design agent."
+requires-python = ">=3.10"
+dependencies = [
+    "materialhack-loop-runner>=0.1.0",
+    "materialhack-memory>=0.1.0",
+]
+
+[project.scripts]
+materialhack-agent = "materialhack_agent.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

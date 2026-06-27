@@ -14,6 +14,7 @@ without accidentally overwriting another collaborator's direction.
 | `TRS` | Team | Topological Reorganization Score implementation for protein-metal binding structure scoring and explanation. | Remote branch. Candidate screening tool that should consume generated or retrieved structure artifacts. |
 | `loop-runner` | M-priv (Michael) | Runner orchestration above memory after `loop_0`, including planner, generator, Boltz, screening, verifier, and reflection adapter boundaries. | Local branch/worktree scope observed; not present on `origin` yet. |
 | `codex/define-boltz-model-usage` | M-priv (Michael) | Documents how the agentic system should use Boltz-family generation, structure, and evaluation models across WF, memory, TRS, and runner branches. | Active documentation branch. See `BOLTZ_MODELS.md`. |
+| `codex/package-agent-app` | M-priv (Michael) | App composition layer that packages WF-style seed handoff, durable memory, loop runner, and future TRS/verifier adapter slots into a runnable agentic system. | Active integration branch. Additive only while owned branches remain separate. |
 
 Update this table when a collaborator takes ownership of a new branch or when a
 branch changes scope.
