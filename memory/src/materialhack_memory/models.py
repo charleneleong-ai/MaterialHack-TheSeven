@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Mapping
+from types import UnionType
+from typing import Any, Mapping, Union, get_args, get_origin, get_type_hints
 
 
 JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
@@ -22,6 +23,7 @@ class CandidateOrigin(str, Enum):
 
 
 class LoopStatus(str, Enum):
+    PENDING = "pending"
     ACTIVE = "active"
     AVAILABLE = "available"
     ABANDONED = "abandoned"
@@ -149,6 +151,69 @@ class ProteinCandidate:
 
 
 @dataclass(frozen=True)
+class SeedCandidate:
+    """Pre-loop seed candidate handed over by WF's temporary selection flow."""
+
+    seed_candidate_id: str
+    sequence: str
+    origin: CandidateOrigin
+    source_database: str | None = None
+    source_id: str | None = None
+    name: str | None = None
+    structure_artifacts: tuple[ArtifactRef, ...] = ()
+    boltz_artifacts: tuple[ArtifactRef, ...] = ()
+    evaluations: tuple[EvaluationResult, ...] = ()
+    metadata: Mapping[str, JsonValue] = field(default_factory=dict)
+
+    def to_protein_candidate(self) -> ProteinCandidate:
+        metadata = {
+            **dict(self.metadata),
+            "seed_candidate_id": self.seed_candidate_id,
+        }
+        if self.source_database is not None:
+            metadata["seed_source_database"] = self.source_database
+        if self.source_id is not None:
+            metadata["seed_source_id"] = self.source_id
+        return ProteinCandidate(
+            sequence=self.sequence,
+            origin=self.origin,
+            name=self.name,
+            structure_artifacts=self.structure_artifacts,
+            boltz_artifacts=self.boltz_artifacts,
+            metadata=metadata,
+        )
+
+
+@dataclass(frozen=True)
+class SeedCandidatePool:
+    """Durable record of pre-loop seed candidates considered by WF."""
+
+    pool_id: str
+    objective: DesignObjective
+    conditions: ConditionSet
+    candidates: tuple[SeedCandidate, ...] = ()
+    created_by: str = "WF"
+    created_at: str = field(default_factory=utc_now_iso)
+    metadata: Mapping[str, JsonValue] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SeedSelectionDecision:
+    """WF's selected seed and rationale, persisted before creating loop_0."""
+
+    decision_id: str
+    pool_id: str
+    selected_seed_candidate_id: str
+    rationale: str
+    selected_by: str = "WF"
+    selection_method: str = "screening_verifier_rank"
+    ranked_seed_candidate_ids: tuple[str, ...] = ()
+    human_override: bool = False
+    created_at: str = field(default_factory=utc_now_iso)
+    metadata: Mapping[str, JsonValue] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ProteinChange:
     """One machine-readable change plus its scientific rationale."""
 
@@ -213,6 +278,34 @@ class LoopReflection:
 
 
 @dataclass(frozen=True)
+class LoopCompletenessRequirements:
+    """Required memory fields before an optimization loop can be finalized."""
+
+    require_change_set: bool = True
+    require_change_rationale: bool = True
+    require_boltz: bool = True
+    require_screening: bool = True
+    require_verifier: bool = True
+    require_reflection: bool = True
+    require_next_actions: bool = True
+
+    @classmethod
+    def optimization_loop(cls) -> "LoopCompletenessRequirements":
+        return cls()
+
+    @classmethod
+    def seed_loop(cls) -> "LoopCompletenessRequirements":
+        return cls(require_change_set=False, require_change_rationale=False)
+
+
+@dataclass(frozen=True)
+class LoopCompletenessReport:
+    loop_id: str
+    is_complete: bool
+    missing_requirements: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class HumanInput:
     """Human annotation, rollback reason, or manual design instruction."""
 
@@ -255,6 +348,7 @@ class DesignRun:
     objective: DesignObjective
     root_loop_id: str
     active_loop_id: str
+    seed_selection_decision: SeedSelectionDecision | None = None
     created_at: str = field(default_factory=utc_now_iso)
     metadata: Mapping[str, JsonValue] = field(default_factory=dict)
 
@@ -276,8 +370,58 @@ class AgentLoopContext:
     evaluations: tuple[EvaluationResult, ...]
     reflection: LoopReflection
     human_inputs: tuple[HumanInput, ...]
+    seed_selection_decision: SeedSelectionDecision | None = None
 
     def to_agent_payload(self) -> dict[str, JsonValue]:
+        return to_jsonable(self)
+
+
+@dataclass(frozen=True)
+class LoopGraphEdge:
+    parent_loop_id: str
+    child_loop_id: str
+
+
+@dataclass(frozen=True)
+class LoopGraphNode:
+    """Compact loop summary for graph/timeline visualization."""
+
+    loop_id: str
+    parent_loop_id: str | None
+    index: int
+    status: LoopStatus
+    is_active: bool
+    can_branch_from: bool
+    branch_label: str | None
+    sequence_length: int
+    sequence_preview: str
+    change_summary: str | None
+    change_rationale: str | None
+    change_diffs: tuple[str, ...]
+    latest_metrics: Mapping[str, float]
+    evaluation_kinds: tuple[EvaluationKind, ...]
+    human_input_count: int
+    human_inputs: tuple[HumanInput, ...]
+    reflection: LoopReflection
+    completeness: LoopCompletenessReport | None
+    created_at: str
+
+
+@dataclass(frozen=True)
+class RunVisualizationSnapshot:
+    """Frontend-ready graph snapshot of a design run."""
+
+    run_id: str
+    root_loop_id: str
+    active_loop_id: str
+    objective: DesignObjective
+    conditions: ConditionSet
+    nodes: tuple[LoopGraphNode, ...]
+    edges: tuple[LoopGraphEdge, ...]
+    seed_selection_decision: SeedSelectionDecision | None = None
+    created_at: str = field(default_factory=utc_now_iso)
+
+    def to_frontend_payload(self) -> dict[str, JsonValue]:
         return to_jsonable(self)
 
 
@@ -292,4 +436,61 @@ def to_jsonable(value: Any) -> JsonValue:
         return {str(key): to_jsonable(item) for key, item in value.items()}
     if isinstance(value, tuple | list):
         return [to_jsonable(item) for item in value]
+    return value
+
+
+def from_jsonable(cls: type[Any], value: JsonValue) -> Any:
+    """Rebuild a memory dataclass from JSON/TuringDB storage values."""
+
+    return _decode_jsonable(cls, value)
+
+
+def _decode_jsonable(annotation: Any, value: Any) -> Any:
+    if value is None:
+        return None
+
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+
+    if origin in {Union, UnionType}:
+        non_none_args = [item for item in args if item is not type(None)]
+        last_error: Exception | None = None
+        for item in non_none_args:
+            try:
+                return _decode_jsonable(item, value)
+            except (TypeError, ValueError) as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        return value
+
+    if isinstance(annotation, type) and issubclass(annotation, Enum):
+        return annotation(value)
+
+    if isinstance(annotation, type) and is_dataclass(annotation):
+        if not isinstance(value, Mapping):
+            raise TypeError(f"Expected mapping for {annotation.__name__}")
+        type_hints = get_type_hints(annotation)
+        decoded = {}
+        for item in fields(annotation):
+            if item.name in value:
+                decoded[item.name] = _decode_jsonable(type_hints[item.name], value[item.name])
+        return annotation(**decoded)
+
+    if origin is tuple:
+        item_type = args[0] if args else Any
+        if len(args) == 2 and args[1] is Ellipsis:
+            return tuple(_decode_jsonable(item_type, item) for item in value)
+        return tuple(_decode_jsonable(item_type, item) for item_type, item in zip(args, value))
+
+    if origin is list:
+        item_type = args[0] if args else Any
+        return [_decode_jsonable(item_type, item) for item in value]
+
+    if origin is dict or origin is Mapping:
+        return dict(value)
+
+    if annotation in {str, int, float, bool}:
+        return annotation(value)
+
     return value

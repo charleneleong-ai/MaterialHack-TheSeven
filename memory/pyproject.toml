@@ -5,6 +5,9 @@ description = "Versioned memory abstraction for agentic protein design loops."
 requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+turingdb = ["turingdb>=1.29"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
