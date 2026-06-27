@@ -15,11 +15,13 @@ Run:
 
 from __future__ import annotations
 
+import argparse
 import json
+import math
 import os
 import random
 import re
-import sys
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -30,6 +32,11 @@ from langgraph.graph import StateGraph, END
 # --------------------------------------------------------------------------- #
 SEED = int(os.environ.get("SEED", "7"))
 RNG = random.Random(SEED)
+
+# Which score the stop condition checks against target_score: the cheap
+# in-silico "screen" score, or the higher-fidelity "pseudo_lab" score.
+# Set via the --score-source CLI flag (see main()).
+SCORE_SOURCES = ("screen", "pseudo_lab")
 
 AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
 
@@ -50,6 +57,8 @@ class DesignState(BaseModel):
     iteration: int = 0
     max_iterations: int = 4
     target_score: float = 0.8
+    score_source: str = "pseudo_lab"          # "screen" | "pseudo_lab" — stop-condition input
+    workdir: str = "workbench"                # where candidate structure files are written
     history: list[dict] = Field(default_factory=list)  # best score per iteration
     done: bool = False
     verdict: str = ""
@@ -58,7 +67,7 @@ class DesignState(BaseModel):
 # --------------------------------------------------------------------------- #
 # LLM helper — call Claude IF a key is set, else return the fallback
 # --------------------------------------------------------------------------- #
-MODEL = "claude-opus-4-8"
+MODEL = "claude-sonnet-4-6"
 
 
 def reason(system: str, user: str, fallback: dict) -> dict:
@@ -121,18 +130,75 @@ def memory_retrieve(spec: dict) -> dict:
     return {"template": template, "match_score": round(score, 3)}
 
 
-def boltzgen_generate(spec: dict, n: int = 8) -> list[dict]:
+# Real BoltzGen writes mmCIF (not PDB) at every pipeline stage and tracks
+# per-design metrics in CSV columns alongside it; this stub mirrors that
+# file + metrics-record interface so downstream nodes read a structure
+# artifact the way a real screening tool would, instead of a hand-rolled
+# in-memory schema.
+_AA_3LETTER = {
+    "A": "ALA", "C": "CYS", "D": "ASP", "E": "GLU", "F": "PHE", "G": "GLY",
+    "H": "HIS", "I": "ILE", "K": "LYS", "L": "LEU", "M": "MET", "N": "ASN",
+    "P": "PRO", "Q": "GLN", "R": "ARG", "S": "SER", "T": "THR", "V": "VAL",
+    "W": "TRP", "Y": "TYR",
+}
+
+
+def _idealized_helix_ca_coords(n: int) -> list[tuple[float, float, float]]:
+    """CA coordinates along an idealized alpha helix (rise=1.5 A/residue,
+    twist=100 deg/residue, radius=2.3 A) — a structurally plausible
+    placeholder backbone until real diffusion-model coordinates are wired in.
+    """
+    rise, twist, radius = 1.5, math.radians(100.0), 2.3
+    return [
+        (radius * math.cos(i * twist), radius * math.sin(i * twist), i * rise)
+        for i in range(n)
+    ]
+
+
+def _write_stub_cif(path: Path, candidate_id: str, sequence: str, plddt_per_residue: list[float]) -> None:
+    """Write a minimal mmCIF `_atom_site` loop: one CA per residue, with
+    per-residue pLDDT in `B_iso_or_equiv` — the same column AlphaFold/Boltz
+    use to carry confidence, so any standard structure reader can recover it.
+    """
+    lines = [
+        f"data_{candidate_id}", "#", "loop_",
+        "_atom_site.group_PDB", "_atom_site.id", "_atom_site.type_symbol",
+        "_atom_site.label_atom_id", "_atom_site.label_comp_id",
+        "_atom_site.label_asym_id", "_atom_site.label_seq_id",
+        "_atom_site.Cartn_x", "_atom_site.Cartn_y", "_atom_site.Cartn_z",
+        "_atom_site.occupancy", "_atom_site.B_iso_or_equiv",
+    ]
+    coords = _idealized_helix_ca_coords(len(sequence))
+    for i, (aa, (x, y, z), plddt) in enumerate(zip(sequence, coords, plddt_per_residue), start=1):
+        resname = _AA_3LETTER.get(aa, "UNK")
+        lines.append(
+            f"ATOM {i} C CA {resname} A {i} {x:.3f} {y:.3f} {z:.3f} 1.00 {plddt * 100:.2f}"
+        )
+    lines.append("#")
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _read_residue_bfactors(path: Path) -> list[float]:
+    """Read per-residue B_iso_or_equiv (pLDDT*100) back out of a CIF written
+    by `_write_stub_cif`, in residue order — screening reads confidence off
+    the structure file itself, not a side-channel python list.
+    """
+    return [float(line.split()[-1]) / 100 for line in path.read_text().splitlines()
+            if line.startswith("ATOM")]
+
+
+def boltzgen_generate(spec: dict, workdir: Path, n: int = 8) -> list[dict]:
     """Return N candidate design bundles.
 
-    A real BoltzGen call returns far more than a sequence: a structure
-    (atomic coordinates), per-residue and global confidence (pLDDT, pTM,
-    ipTM, PAE), and design metadata (motif/contig, predicted binding-site
-    residues, sampling seed). This stub mirrors that shape with random
-    values so downstream nodes (screening, scoring) can consume the same
-    fields the real model will produce.
+    Mirrors BoltzGen's real interface: each candidate is a structure file
+    (mmCIF — BoltzGen's native output, not PDB) plus a metrics record, not
+    an in-memory blob of fabricated structure fields. Per-residue confidence
+    lives in the CIF; global metrics (plddt, ptm, iptm, pae, composition)
+    mirror BoltzGen's own analysis-CSV columns.
 
     # TODO: replace with real skill (BoltzGen structure-conditioned generation).
     """
+    workdir.mkdir(parents=True, exist_ok=True)
     candidates = []
     length = int(spec.get("length", 60))
     target = spec.get("target", "unknown")
@@ -140,29 +206,27 @@ def boltzgen_generate(spec: dict, n: int = 8) -> list[dict]:
         "template_id",
         RNG.choice(["zinc-finger", "EF-hand", "coiled-coil", "beta-barrel"]),
     )
-    for i in range(n):
+    for _ in range(n):
+        cand_id = f"cand-{RNG.randint(10000, 99999)}"
         seq = "".join(RNG.choice(AMINO_ACIDS) for _ in range(length))
         plddt_per_residue = [round(RNG.uniform(0.35, 0.98), 3) for _ in range(length)]
-        mean_plddt = round(sum(plddt_per_residue) / length, 3)
+
+        structure_path = workdir / f"{cand_id}.cif"
+        _write_stub_cif(structure_path, cand_id, seq, plddt_per_residue)
+
         n_sites = min(RNG.randint(2, 4), length)
         binding_site_residues = sorted(RNG.sample(range(1, length + 1), k=n_sites))
         candidates.append(
             {
-                "id": f"cand-{RNG.randint(10000, 99999)}",
-                "sequence": seq,
-                "chains": [
-                    {"chain_id": "A", "role": "designed", "sequence": seq, "length": length}
-                ],
-                "structure": {
-                    "format": "pdb",
-                    "num_atoms": length * 8,  # rough heavy-atom count, stand-in for real coords
-                },
-                "confidence": {
-                    "plddt_per_residue": plddt_per_residue,
-                    "plddt": mean_plddt,
+                "id": cand_id,
+                "structure_path": str(structure_path),
+                "sequence": seq,  # cached for convenience; the CIF is the source of truth
+                "metrics": {
+                    "plddt": round(sum(plddt_per_residue) / length, 3),
                     "ptm": round(RNG.uniform(0.3, 0.9), 3),
                     "iptm": round(RNG.uniform(0.3, 0.9), 3) if target != "unknown" else None,
                     "pae_mean": round(RNG.uniform(2.0, 12.0), 2),
+                    "ALA_fraction": round(seq.count("A") / length, 3),
                 },
                 "design_metadata": {
                     "motif": motif,
@@ -176,21 +240,21 @@ def boltzgen_generate(spec: dict, n: int = 8) -> list[dict]:
 
 
 def screen_score(candidates: list[dict]) -> list[dict]:
-    """Score candidates from BoltzGen's own confidence metrics, return sorted desc.
+    """Score candidates from BoltzGen's structure file + metrics, return sorted desc.
 
-    Composite of global plddt/ptm plus a small bonus for confidently-placed
-    binding-site residues (their local pLDDT), so a "good" candidate is one
-    BoltzGen is structurally confident about *at the functional site*, not
-    just on average.
+    Composite of global plddt/ptm plus a bonus for confidently-placed
+    binding-site residues, whose pLDDT is read straight back out of each
+    candidate's CIF — the same way a real screening tool would read
+    confidence off the structure BoltzGen produced, not a python side-channel.
 
     # TODO: replace with real skill (in-silico screening / scoring model).
     """
     for c in candidates:
-        conf = c["confidence"]
+        metrics = c["metrics"]
         site_residues = c["design_metadata"]["binding_site_residues"]
-        site_plddt = [conf["plddt_per_residue"][r - 1] for r in site_residues]
-        site_confidence = sum(site_plddt) / len(site_plddt)
-        c["score"] = round(0.4 * conf["plddt"] + 0.3 * conf["ptm"] + 0.3 * site_confidence, 3)
+        residue_plddt = _read_residue_bfactors(Path(c["structure_path"]))
+        site_confidence = sum(residue_plddt[r - 1] for r in site_residues) / len(site_residues)
+        c["score"] = round(0.4 * metrics["plddt"] + 0.3 * metrics["ptm"] + 0.3 * site_confidence, 3)
     return sorted(candidates, key=lambda c: c["score"], reverse=True)
 
 
@@ -339,12 +403,13 @@ def compile_spec(state: DesignState) -> DesignState:
 
 
 def boltzgen_node(state: DesignState) -> DesignState:
-    """(STUB) Return N candidate design bundles (structure + confidence + metadata)."""
-    state.candidates = boltzgen_generate(state.spec, n=8)
-    avg_plddt = sum(c["confidence"]["plddt"] for c in state.candidates) / len(state.candidates)
+    """(STUB) Return N candidate design bundles (CIF structure file + metrics + metadata)."""
+    iter_dir = Path(state.workdir) / "candidates" / f"iter{state.iteration}"
+    state.candidates = boltzgen_generate(state.spec, workdir=iter_dir, n=8)
+    avg_plddt = sum(c["metrics"]["plddt"] for c in state.candidates) / len(state.candidates)
     print(
         f"[5] boltzgen_generate (stub) -> {len(state.candidates)} candidates "
-        f"(avg plddt={avg_plddt:.3f})"
+        f"(avg plddt={avg_plddt:.3f}) -> {iter_dir}/"
     )
     return state
 
@@ -374,8 +439,14 @@ def pseudo_lab_node(state: DesignState) -> DesignState:
 
 
 def diagnose_replan(state: DesignState) -> DesignState:
-    """(LLM) Decide done vs. continue."""
-    met = state.pseudo_lab_score >= state.target_score
+    """(LLM) Decide done vs. continue, against whichever score
+    `state.score_source` selects — the cheap "screen" score or the
+    higher-fidelity "pseudo_lab" score.
+    """
+    current_score = (
+        state.best["score"] if state.score_source == "screen" else state.pseudo_lab_score
+    )
+    met = current_score >= state.target_score
     exhausted = state.iteration >= state.max_iterations
     fallback = {
         "done": bool(met or exhausted),
@@ -388,7 +459,8 @@ def diagnose_replan(state: DesignState) -> DesignState:
         "target or iterations are exhausted.",
         user=json.dumps(
             {
-                "pseudo_lab_score": state.pseudo_lab_score,
+                "score_source": state.score_source,
+                "current_score": current_score,
                 "target_score": state.target_score,
                 "iteration": state.iteration,
                 "max_iterations": state.max_iterations,
@@ -399,7 +471,10 @@ def diagnose_replan(state: DesignState) -> DesignState:
     # Guardrail: always stop once iterations are exhausted, regardless of LLM.
     state.done = bool(decision.get("done", fallback["done"])) or exhausted
     state.verdict = decision.get("verdict", fallback["verdict"])
-    print(f"[8] diagnose_replan (LLM)    -> done={state.done} verdict='{state.verdict}'")
+    print(
+        f"[8] diagnose_replan (LLM)    -> done={state.done} verdict='{state.verdict}' "
+        f"({state.score_source}={current_score:.3f})"
+    )
     return state
 
 
@@ -444,18 +519,38 @@ def build_graph():
 DEFAULT_OBJECTIVE = "design a protein that binds Zn2+ at pH 5 and can polymerize"
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Agentic protein-design workflow")
+    parser.add_argument(
+        "objective", nargs="?", default=DEFAULT_OBJECTIVE,
+        help="natural-language design objective (default: a Zn2+ binder demo)",
+    )
+    parser.add_argument(
+        "--score-source", choices=SCORE_SOURCES, default="pseudo_lab",
+        help="which score the stop condition checks against target_score "
+        "(default: pseudo_lab)",
+    )
+    parser.add_argument(
+        "--workdir", default="workbench",
+        help="directory candidate structure files (CIF) are written under (default: workbench)",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
-    objective = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_OBJECTIVE
+    args = parse_args()
     mode = "Claude" if os.environ.get("ANTHROPIC_API_KEY") else "offline fallback"
 
     print("=" * 70)
     print("Agentic Protein-Design Workflow")
-    print(f"  objective : {objective}")
-    print(f"  reasoning : {mode}  |  seed: {SEED}")
+    print(f"  objective : {args.objective}")
+    print(f"  reasoning : {mode}  |  seed: {SEED}  |  score source: {args.score_source}")
     print("=" * 70)
 
     graph = build_graph()
-    init = DesignState(objective=objective)
+    init = DesignState(
+        objective=args.objective, score_source=args.score_source, workdir=args.workdir
+    )
     # Recursion limit must cover ~7 nodes/iteration over max_iterations + slack.
     final = graph.invoke(init, config={"recursion_limit": 50})
     state = DesignState(**final)
@@ -470,11 +565,12 @@ def main() -> None:
     print("-" * 70)
     print("Final summary")
     best = state.best
-    conf = best["confidence"]
+    metrics = best["metrics"]
     meta = best["design_metadata"]
     print(f"  best candidate : {best['id']}")
+    print(f"  structure file : {best['structure_path']}")
     print(f"  sequence       : {best['sequence'][:40]}...")
-    print(f"  plddt / ptm    : {conf['plddt']:.3f} / {conf['ptm']:.3f}  (iptm={conf['iptm']})")
+    print(f"  plddt / ptm    : {metrics['plddt']:.3f} / {metrics['ptm']:.3f}  (iptm={metrics['iptm']})")
     print(f"  binding site   : residues {meta['binding_site_residues']} (motif={meta['motif']})")
     print(f"  final score    : {state.pseudo_lab_score:.3f}")
     print(f"  iterations     : {state.iteration}")
