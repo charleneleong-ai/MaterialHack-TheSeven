@@ -11,6 +11,11 @@ pulls it from the public [`charleneleong-ai/ai4science`](https://github.com/char
 repo on first use (requires `uv` on PATH). No install or vendoring.
 
 ## Verifier stack
+
+![touchstone verifier stack](touchstone-verifier-stack.png)
+
+*Conceptual architecture (the geometry tier also includes the nVECSUM symmetry + polyhedron-shape checks listed below).*
+
 Defense-in-depth — independent methods across complementary axes; each design gets a
 trust/weak/defer per tier, rolled into one `consensus` (a single `defer` collapses it):
 
