@@ -62,3 +62,13 @@ Accepted boundary:
 The LLM-facing Boltz usage skill is documented in `BOLTZ_MODELS.md`. Use it when
 an agent needs to decide how to call Boltz models, preserve Boltz artifacts, or
 interpret Boltz outputs.
+
+## Design Verification (touchstone)
+
+After a generator proposes a metal-binder structure, verify it before wet-lab with the
+`verify_metal_binder` MCP tool (touchstone) — `verify_metal_binder(structure_path, metal,
+deep=False, stress=False)` returns per-tier verdicts + a trust/weak/defer consensus. Only
+`trust` clears the wet-lab bar. The verification skill is documented in `TOUCHSTONE.md`; the
+MCP server is wired in `.mcp.json` (pulled from the public `charleneleong-ai/ai4science` repo
+via `uvx`, needs `uv` on PATH). Use it to triage which designs are worth synthesizing and to
+score them for iteration.
